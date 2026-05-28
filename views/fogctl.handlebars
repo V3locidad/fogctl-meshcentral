@@ -82,7 +82,9 @@
     checkedNodes: {},   // nodeid -> true
     fogMap: {},         // nodeid -> { hostId, name, image } or null
     snapins: [],
-    images: []
+    images: [],
+    taskMap: {}   // hostID -> { type, label, percent, state }
+
   };
 
   function $(id) { return document.getElementById(id); }
@@ -199,12 +201,18 @@
       if (fog === undefined) status = '<span class="fog-status pend">?</span>';
       else if (fog === null) status = '<span class="fog-status miss">no FOG host</span>';
       else status = '<span class="fog-status match">FOG #' + fog.id + (fog.image ? ' • ' + escapeHtml(fog.image) : '') + '</span>';
+      var task = state.taskMap[n.id];
+      var taskBadge = '';
+      if (task) {
+        var pct = (task.percent != null) ? (' ' + task.percent + '%') : '';
+        taskBadge = '<span class="fog-status pend">' + escapeHtml(task.label + pct) + '</span>';
+      }
       html += '<div class="row" data-nid="' + n.id + '">'
             + '<input type="checkbox" data-nid="' + n.id + '"' + ck + '>'
             + '<span class="dot ' + (n.online ? 'on' : 'off') + '"></span>'
             + escapeHtml(n.name)
-            + '<span class="pill">' + (n.mac || 'no MAC') + '</span>'
             + status
+            + taskBadge
             + '</div>';
     });
     $('nodeList').innerHTML = html;
@@ -278,6 +286,29 @@
   function autoResolveSoon() {
     if (resolveTimer) clearTimeout(resolveTimer);
     resolveTimer = setTimeout(function () { resolveNodes(visibleNodes(), false); }, 250);
+  }
+
+  // Poll FOG for active tasks. We build a map: nodeId -> task info, by reverse-
+  // mapping FOG host id -> nodeId via the fogMap we already built.
+  function pollActiveTasks() {
+    api('activeTasks').then(function (r) {
+      var byFogHost = (r && r.byHost) || {};
+      var fogToNode = {};
+      Object.keys(state.fogMap).forEach(function (nid) {
+        var f = state.fogMap[nid];
+        if (f && f.id) fogToNode[f.id] = nid;
+      });
+      var newMap = {};
+      Object.keys(byFogHost).forEach(function (hid) {
+        var nid = fogToNode[hid];
+        if (nid) newMap[nid] = byFogHost[hid];
+      });
+      // Only re-render if anything actually changed.
+      if (JSON.stringify(newMap) !== JSON.stringify(state.taskMap)) {
+        state.taskMap = newMap;
+        renderNodes();
+      }
+    }).catch(function () { /* silent */ });
   }
 
   function loadImages() {
@@ -404,6 +435,8 @@
         loadImages();
         loadSnapins();
         autoResolveSoon();
+        pollActiveTasks();
+        setInterval(pollActiveTasks, 8000);
       } else {
         el.textContent = 'FOG: ' + (r && r.error ? r.error : 'unreachable');
         el.style.background = '#f8d7da';

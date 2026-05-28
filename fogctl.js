@@ -287,10 +287,36 @@ module.exports.fogctl = function (parent) {
             return stepS();
         }
 
-        // -------- tasks: list active tasks (admin visibility) --------
+        // -------- tasks: raw passthrough for debugging --------
         if (action === 'tasks') {
             return fogCall('GET', '/fog/task/active')
                 .then(function (r) { sendJson(res, 200, r.data); })
+                .catch(function (e) { sendJson(res, 500, { error: e.message }); });
+        }
+
+        // -------- activeTasks: simplified per-host status used by the UI poller --------
+        if (action === 'activeTasks') {
+            return fogCall('GET', '/fog/task/active')
+                .then(function (r) {
+                    var arr = (r.data && r.data.tasks) || r.data || [];
+                    var byHost = {};
+                    // FOG task type names (subset): 1=Deploy, 2=Capture, 8=Multicast, 12=Snapin
+                    var typeNames = { '1': 'Deploy', '2': 'Capture', '8': 'Multicast', '12': 'Snapin' };
+                    arr.forEach(function (t) {
+                        var hid = t.hostID || (t.host && t.host.id);
+                        if (!hid) return;
+                        var typeId = String(t.typeID || (t.type && t.type.id) || '');
+                        byHost[hid] = {
+                            taskId: t.id,
+                            type: typeId,
+                            label: typeNames[typeId] || ('Task ' + typeId),
+                            state: t.stateID || (t.state && t.state.id),
+                            stateName: t.stateName || (t.state && t.state.name),
+                            percent: t.percent != null ? t.percent : null
+                        };
+                    });
+                    sendJson(res, 200, { byHost: byHost, count: arr.length });
+                })
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
