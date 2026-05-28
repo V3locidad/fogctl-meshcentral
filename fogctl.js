@@ -240,11 +240,11 @@ module.exports.fogctl = function (parent) {
                         name: 'fogctl ' + action + ' ' + scheduledFor,
                         hostID: parseInt(id, 10),
                         taskTypeID: taskType,
-                        // FOG's ScheduledTask requires 'type' = S/C/... (schedule
-                        // kind), separately from taskTypeID. Both fields are
-                        // mandatory in 1.5.x.
+                        // FOG ScheduledTask: 'type' is the schedule kind (S/C),
+                        // 'runtime' is the Unix timestamp for one-shot ('S').
                         type: 'S',
                         scheduleType: 'S',
+                        runtime: ts,
                         scheduleTimeStamp: ts,
                         isActive: 1
                     };
@@ -312,6 +312,7 @@ module.exports.fogctl = function (parent) {
                                 taskTypeID: 12,
                                 type: 'S',
                                 scheduleType: 'S',
+                                runtime: ts,
                                 scheduleTimeStamp: ts,
                                 isActive: 1
                             };
