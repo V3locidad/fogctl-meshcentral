@@ -95,21 +95,30 @@ module.exports.fogctl = function (parent) {
 
     // Local host cache: avoids hammering FOG when several lookups run in a row.
     // We refresh whenever the cache is older than CACHE_TTL_MS.
-    var hostCache = { at: 0, hosts: [], macMap: {} };
+    var hostCache = { at: 0, hosts: [], macMap: {}, nameMap: {} };
     var CACHE_TTL_MS = 30 * 1000;
 
-    function buildMacMap(hosts) {
-        var map = {};
+    function normalizeName(s) {
+        if (!s) return '';
+        // Strip an AD domain suffix and lowercase; FOG and MeshCentral often
+        // differ only by the FQDN tail (e.g. PC-001 vs PC-001.l-graves.local).
+        return String(s).toLowerCase().split('.')[0].trim();
+    }
+
+    function buildMaps(hosts) {
+        var macMap = {}, nameMap = {};
         hosts.forEach(function (h) {
-            if (h.primac) map[normalizeMac(h.primac)] = h;
+            if (h.primac) macMap[normalizeMac(h.primac)] = h;
             if (Array.isArray(h.macs)) {
                 h.macs.forEach(function (m) {
                     var k = normalizeMac(m);
-                    if (k) map[k] = h;
+                    if (k) macMap[k] = h;
                 });
             }
+            var nk = normalizeName(h.name);
+            if (nk) nameMap[nk] = h;
         });
-        return map;
+        return { macMap: macMap, nameMap: nameMap };
     }
 
     // The search endpoint in FOG 1.5.x is finicky across builds: in practice the
@@ -122,16 +131,20 @@ module.exports.fogctl = function (parent) {
         }
         return fogCall('GET', '/fog/host').then(function (r) {
             var arr = (r.data && r.data.hosts) || [];
-            hostCache = { at: Date.now(), hosts: arr, macMap: buildMacMap(arr) };
+            var maps = buildMaps(arr);
+            hostCache = { at: Date.now(), hosts: arr, macMap: maps.macMap, nameMap: maps.nameMap };
             return hostCache;
         });
     }
 
-    function findHostByMac(mac) {
-        var clean = normalizeMac(mac);
-        if (clean.length !== 12) return Promise.resolve(null);
+    // Resolve a MeshCentral node to a FOG host. Tries MAC first, then hostname.
+    function findHost(mac, name) {
+        var cleanMac = normalizeMac(mac);
+        var cleanName = normalizeName(name);
         return getAllHosts(false).then(function (cache) {
-            return cache.macMap[clean] || null;
+            if (cleanMac.length === 12 && cache.macMap[cleanMac]) return cache.macMap[cleanMac];
+            if (cleanName && cache.nameMap[cleanName]) return cache.nameMap[cleanName];
+            return null;
         }).catch(function () { return null; });
     }
 
@@ -170,22 +183,32 @@ module.exports.fogctl = function (parent) {
                 .catch(function (e) { sendJson(res, 200, { ok: false, error: e.message }); });
         }
 
-        // -------- lookup: resolve a single MAC to a FOG host --------
+        // -------- lookup: resolve a single MAC and/or hostname to a FOG host --------
         if (action === 'lookup') {
-            var mac = req.query.mac;
-            return findHostByMac(mac).then(function (host) {
-                sendJson(res, 200, { mac: mac, host: host });
+            return findHost(req.query.mac, req.query.name).then(function (host) {
+                sendJson(res, 200, { mac: req.query.mac, name: req.query.name, host: host });
             }).catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- bulk lookup: resolve N MACs in one shot using the cached host list --------
+        // -------- bulk lookup: receives `items=key|mac|name,key|mac|name,...`
+        // The client passes the MeshCentral nodeId as `key` so it can map results back.
         if (action === 'lookupBulk') {
-            var macs = (req.query.macs || '').split(',').filter(Boolean);
+            var raw = req.query.items || '';
+            var items = raw.split(',').filter(Boolean).map(function (s) {
+                var p = s.split('|');
+                return { key: decodeURIComponent(p[0] || ''), mac: decodeURIComponent(p[1] || ''), name: decodeURIComponent(p[2] || '') };
+            });
             return getAllHosts(req.query.refresh === '1').then(function (cache) {
                 var results = {};
-                macs.forEach(function (m) {
-                    var h = cache.macMap[normalizeMac(m)];
-                    results[m] = h ? { id: h.id, name: h.name, image: h.imagename || (h.image && h.image.name) } : null;
+                items.forEach(function (it) {
+                    var h = null;
+                    var cm = normalizeMac(it.mac);
+                    if (cm.length === 12 && cache.macMap[cm]) h = cache.macMap[cm];
+                    if (!h) {
+                        var nn = normalizeName(it.name);
+                        if (nn && cache.nameMap[nn]) h = cache.nameMap[nn];
+                    }
+                    results[it.key] = h ? { id: h.id, name: h.name, image: h.imagename || (h.image && h.image.name), matchedBy: cm && cache.macMap[cm] ? 'mac' : 'name' } : null;
                 });
                 sendJson(res, 200, results);
             }).catch(function (e) { sendJson(res, 500, { error: e.message }); });

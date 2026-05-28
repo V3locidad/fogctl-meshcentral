@@ -246,21 +246,20 @@
   function lookupSelected() {
     var ids = selectedNodeIds();
     if (!ids.length) { alert('No computer selected.'); return Promise.resolve(); }
-    var macToNode = {};
-    var macs = [];
+    var items = [];
     ids.forEach(function (id) {
       var n = state.nodes.find(function (x) { return x.id === id; });
-      if (n && n.mac) { macToNode[n.mac] = id; macs.push(n.mac); }
+      if (!n) return;
+      // FOG match works on MAC OR hostname; we send both so the server can fall back.
+      items.push(encodeURIComponent(id) + '|' + encodeURIComponent(n.mac || '') + '|' + encodeURIComponent(n.name || ''));
     });
-    if (!macs.length) { log('No usable MAC in selection.'); return Promise.resolve(); }
-    log('Looking up ' + macs.length + ' MAC(s) in FOG…');
-    return api('lookupBulk', { macs: macs.join(',') }).then(function (r) {
-      Object.keys(r).forEach(function (mac) {
-        var nid = macToNode[mac];
-        if (nid) state.fogMap[nid] = r[mac];
-      });
-      var matched = Object.keys(r).filter(function (m) { return r[m]; }).length;
-      log('FOG lookup: ' + matched + '/' + macs.length + ' matched.');
+    if (!items.length) { log('No nodes to look up.'); return Promise.resolve(); }
+    log('Looking up ' + items.length + ' node(s) in FOG…');
+    return api('lookupBulk', { items: items.join(',') }).then(function (r) {
+      Object.keys(r).forEach(function (nid) { state.fogMap[nid] = r[nid]; });
+      var matched = Object.keys(r).filter(function (k) { return r[k]; }).length;
+      var byName = Object.keys(r).filter(function (k) { return r[k] && r[k].matchedBy === 'name'; }).length;
+      log('FOG lookup: ' + matched + '/' + items.length + ' matched' + (byName ? ' (' + byName + ' by hostname)' : '') + '.');
       renderNodes();
     });
   }
