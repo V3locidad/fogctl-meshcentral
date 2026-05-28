@@ -1,0 +1,388 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>FOG Control</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; margin: 0; padding: 10px; color: #222; }
+  h2 { margin: 0 0 10px 0; font-size: 16px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; }
+  .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
+  button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
+  button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
+  button.danger { background: #c0392b; color: white; border-color: #c0392b; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cols { display: flex; gap: 10px; }
+  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; min-height: 400px; max-height: 520px; overflow: auto; }
+  .col h3 { margin: 0; padding: 8px; background: #eee; border-bottom: 1px solid #ddd; font-size: 13px; }
+  .col .search { padding: 6px 8px; border-bottom: 1px solid #eee; }
+  .col .search input { width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; }
+  .row { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .row:hover { background: #f8f8ff; }
+  .row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.on { background: #2ecc71; }
+  .dot.off { background: #e74c3c; }
+  .row .fog-status { font-size: 11px; margin-left: auto; padding: 1px 6px; border-radius: 10px; }
+  .fog-status.match { background: #d4edda; color: #155724; }
+  .fog-status.miss  { background: #f8d7da; color: #721c24; }
+  .fog-status.pend  { background: #fff3cd; color: #856404; }
+  #logs { margin-top: 10px; background: #111; color: #ddd; font-family: Menlo, Consolas, monospace; font-size: 12px; padding: 8px; border-radius: 4px; height: 180px; overflow: auto; white-space: pre-wrap; display: none; }
+  #progress { font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<h2>FOG Control <span id="cfgState" class="pill">checking…</span></h2>
+
+<div class="bar">
+  <strong>Action:</strong>
+  <select id="actionSel">
+    <option value="deploy">Deploy image</option>
+    <option value="capture">Capture image</option>
+    <option value="snapin">Run snapin</option>
+  </select>
+  <span id="snapinWrap" style="display:none">
+    <select id="snapinSel"><option>loading…</option></select>
+  </span>
+  <button id="lookupBtn">Resolve FOG hosts</button>
+  <button id="runBtn" class="primary">Run on selected</button>
+  <span id="progress"></span>
+  <span style="margin-left:auto">
+    <button id="logsBtn">Logs</button>
+  </span>
+</div>
+
+<div class="cols">
+  <div class="col">
+    <h3>Groups</h3>
+    <div class="search"><input id="groupSearch" placeholder="Filter groups…"></div>
+    <div id="groupList"></div>
+  </div>
+  <div class="col">
+    <h3>Computers <span id="countLabel" class="pill"></span></h3>
+    <div class="search"><input id="nodeSearch" placeholder="Filter computers…"></div>
+    <div id="nodeList"></div>
+  </div>
+</div>
+
+<div id="logs"></div>
+
+<script>
+(function () {
+  var W = window;
+  var P = (W.parent && W.parent !== W) ? W.parent : W;
+
+  var state = {
+    groups: [],
+    nodes: [],
+    selectedGroup: null,
+    checkedNodes: {},   // nodeid -> true
+    fogMap: {},         // nodeid -> { hostId, name, image } or null
+    snapins: []
+  };
+
+  function $(id) { return document.getElementById(id); }
+  function log(msg) {
+    var el = $('logs');
+    var t = new Date().toLocaleTimeString();
+    el.textContent += '[' + t + '] ' + msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  }
+  function showLogs(v) { $('logs').style.display = v ? 'block' : 'none'; }
+
+  // ---- access the MeshCentral nodes/meshes datastructure in the parent frame ----
+  function getMeshes() {
+    try { return P.meshes || P.window.meshes || {}; } catch (e) { return {}; }
+  }
+  function getNodes() {
+    try { return P.nodes || P.window.nodes || {}; } catch (e) { return {}; }
+  }
+
+  function isWindows(node) {
+    // MeshCentral agent ids for Windows: 1, 2, 3, 4, 13 (consoles + service variants)
+    var winIds = [1, 2, 3, 4, 13];
+    return node && node.agent && winIds.indexOf(node.agent.id) !== -1;
+  }
+
+  function getNodeMac(node) {
+    if (!node) return '';
+    if (node.intelamt && node.intelamt.mac) return node.intelamt.mac;
+    if (node.netif2) {
+      var k;
+      for (k in node.netif2) {
+        var ifs = node.netif2[k];
+        if (Array.isArray(ifs)) {
+          for (var i = 0; i < ifs.length; i++) {
+            if (ifs[i].mac && ifs[i].mac !== '00:00:00:00:00:00') return ifs[i].mac;
+          }
+        }
+      }
+    }
+    if (node.mac) return node.mac;
+    return '';
+  }
+
+  function loadFromMesh() {
+    var meshes = getMeshes();
+    var nodes = getNodes();
+    var gList = [];
+    var nList = [];
+    var meshId;
+    for (meshId in meshes) {
+      var m = meshes[meshId];
+      if (!m) continue;
+      gList.push({ id: meshId, name: m.name || meshId });
+    }
+    var nid;
+    for (nid in nodes) {
+      var n = nodes[nid];
+      if (!n) continue;
+      if (!isWindows(n)) continue;
+      nList.push({
+        id: nid,
+        name: n.name || nid,
+        meshid: n.meshid,
+        online: !!(n.conn & 1),
+        mac: getNodeMac(n)
+      });
+    }
+    gList.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    nList.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    state.groups = gList;
+    state.nodes = nList;
+  }
+
+  function renderGroups() {
+    var filter = $('groupSearch').value.toLowerCase();
+    var html = '';
+    html += '<div class="row" data-gid="__all__"><b>All Windows computers</b><span class="pill">' + state.nodes.length + '</span></div>';
+    state.groups.forEach(function (g) {
+      if (filter && g.name.toLowerCase().indexOf(filter) === -1) return;
+      var count = state.nodes.filter(function (n) { return n.meshid === g.id; }).length;
+      if (!count) return;
+      var sel = (state.selectedGroup === g.id) ? ' style="background:#eef6ff"' : '';
+      html += '<div class="row" data-gid="' + g.id + '"' + sel + '>' + escapeHtml(g.name) + '<span class="pill">' + count + '</span></div>';
+    });
+    $('groupList').innerHTML = html;
+    [].slice.call($('groupList').querySelectorAll('.row')).forEach(function (el) {
+      el.onclick = function () {
+        var gid = el.getAttribute('data-gid');
+        state.selectedGroup = (gid === '__all__') ? null : gid;
+        renderGroups();
+        renderNodes();
+      };
+    });
+  }
+
+  function visibleNodes() {
+    var filter = $('nodeSearch').value.toLowerCase();
+    return state.nodes.filter(function (n) {
+      if (state.selectedGroup && n.meshid !== state.selectedGroup) return false;
+      if (filter && n.name.toLowerCase().indexOf(filter) === -1) return false;
+      return true;
+    });
+  }
+
+  function renderNodes() {
+    var arr = visibleNodes();
+    $('countLabel').textContent = arr.length;
+    var html = '<div class="row" style="background:#fafafa"><input type="checkbox" id="checkAll"> <b>Select all visible</b></div>';
+    arr.forEach(function (n) {
+      var ck = state.checkedNodes[n.id] ? ' checked' : '';
+      var fog = state.fogMap[n.id];
+      var status = '';
+      if (fog === undefined) status = '<span class="fog-status pend">?</span>';
+      else if (fog === null) status = '<span class="fog-status miss">no FOG host</span>';
+      else status = '<span class="fog-status match">FOG #' + fog.id + (fog.image ? ' • ' + escapeHtml(fog.image) : '') + '</span>';
+      html += '<div class="row" data-nid="' + n.id + '">'
+            + '<input type="checkbox" data-nid="' + n.id + '"' + ck + '>'
+            + '<span class="dot ' + (n.online ? 'on' : 'off') + '"></span>'
+            + escapeHtml(n.name)
+            + '<span class="pill">' + (n.mac || 'no MAC') + '</span>'
+            + status
+            + '</div>';
+    });
+    $('nodeList').innerHTML = html;
+    [].slice.call($('nodeList').querySelectorAll('input[type=checkbox][data-nid]')).forEach(function (cb) {
+      cb.onclick = function (ev) {
+        ev.stopPropagation();
+        var nid = cb.getAttribute('data-nid');
+        if (cb.checked) state.checkedNodes[nid] = true;
+        else delete state.checkedNodes[nid];
+      };
+    });
+    var ca = $('checkAll');
+    if (ca) ca.onclick = function () {
+      var ck = ca.checked;
+      arr.forEach(function (n) {
+        if (ck) state.checkedNodes[n.id] = true;
+        else delete state.checkedNodes[n.id];
+      });
+      renderNodes();
+    };
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function api(action, params) {
+    var qs = 'action=' + encodeURIComponent(action);
+    if (params) {
+      Object.keys(params).forEach(function (k) {
+        qs += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+      });
+    }
+    return fetch('/pluginadmin.ashx?pin=fogctl&' + qs, { credentials: 'include' })
+      .then(function (r) { return r.json(); });
+  }
+
+  function selectedNodeIds() {
+    return Object.keys(state.checkedNodes);
+  }
+
+  function lookupSelected() {
+    var ids = selectedNodeIds();
+    if (!ids.length) { alert('No computer selected.'); return Promise.resolve(); }
+    var macToNode = {};
+    var macs = [];
+    ids.forEach(function (id) {
+      var n = state.nodes.find(function (x) { return x.id === id; });
+      if (n && n.mac) { macToNode[n.mac] = id; macs.push(n.mac); }
+    });
+    if (!macs.length) { log('No usable MAC in selection.'); return Promise.resolve(); }
+    log('Looking up ' + macs.length + ' MAC(s) in FOG…');
+    return api('lookupBulk', { macs: macs.join(',') }).then(function (r) {
+      Object.keys(r).forEach(function (mac) {
+        var nid = macToNode[mac];
+        if (nid) state.fogMap[nid] = r[mac];
+      });
+      var matched = Object.keys(r).filter(function (m) { return r[m]; }).length;
+      log('FOG lookup: ' + matched + '/' + macs.length + ' matched.');
+      renderNodes();
+    });
+  }
+
+  function loadSnapins() {
+    return api('snapinList').then(function (r) {
+      state.snapins = r.snapins || [];
+      var sel = $('snapinSel');
+      sel.innerHTML = '';
+      if (!state.snapins.length) {
+        sel.innerHTML = '<option value="">(no snapin)</option>';
+        return;
+      }
+      state.snapins.forEach(function (s) {
+        var o = document.createElement('option');
+        o.value = s.id;
+        o.textContent = s.name;
+        sel.appendChild(o);
+      });
+    }).catch(function (e) { log('snapinList failed: ' + e.message); });
+  }
+
+  function runAction() {
+    var action = $('actionSel').value;
+    var ids = selectedNodeIds();
+    if (!ids.length) { alert('No computer selected.'); return; }
+
+    // Make sure we know the FOG host id for each selected node.
+    var missing = ids.filter(function (id) { return state.fogMap[id] === undefined; });
+    var p = missing.length ? lookupSelected() : Promise.resolve();
+
+    p.then(function () {
+      var hostIds = [];
+      var skipped = 0;
+      ids.forEach(function (id) {
+        var f = state.fogMap[id];
+        if (f && f.id) hostIds.push(f.id);
+        else skipped++;
+      });
+      if (!hostIds.length) {
+        alert('None of the selected computers are known to FOG.');
+        return;
+      }
+      var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
+              + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '');
+      if (!confirm(msg + '. Continue?')) return;
+
+      $('progress').textContent = '0/' + hostIds.length;
+      log(msg);
+
+      var apiAction, extra = {};
+      if (action === 'deploy') apiAction = 'deploy';
+      else if (action === 'capture') apiAction = 'capture';
+      else if (action === 'snapin') {
+        apiAction = 'snapinRun';
+        var sid = $('snapinSel').value;
+        if (!sid) { alert('Pick a snapin first.'); return; }
+        extra.snapinId = sid;
+      }
+
+      extra.hostIds = hostIds.join(',');
+      api(apiAction, extra).then(function (r) {
+        if (r && r.results) {
+          var ok = 0, ko = 0, errs = [];
+          Object.keys(r.results).forEach(function (hid) {
+            if (r.results[hid].ok) ok++;
+            else { ko++; errs.push(hid + ': ' + r.results[hid].error); }
+          });
+          $('progress').textContent = ok + '/' + hostIds.length + (ko ? ' (' + ko + ' failed)' : '');
+          log('Done. ' + ok + ' ok, ' + ko + ' failed.');
+          errs.slice(0, 10).forEach(function (e) { log('  ' + e); });
+        } else if (r && r.error) {
+          log('Error: ' + r.error);
+          $('progress').textContent = 'error';
+        }
+      }).catch(function (e) {
+        log('Request failed: ' + e.message);
+      });
+    });
+  }
+
+  function init() {
+    loadFromMesh();
+    renderGroups();
+    renderNodes();
+
+    $('groupSearch').oninput = renderGroups;
+    $('nodeSearch').oninput = renderNodes;
+    $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
+    $('runBtn').onclick = runAction;
+    $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); };
+    $('actionSel').onchange = function () {
+      $('snapinWrap').style.display = ($('actionSel').value === 'snapin') ? '' : 'none';
+    };
+
+    // Ping the FOG server through the plugin endpoint to surface config issues early.
+    api('ping').then(function (r) {
+      var el = $('cfgState');
+      if (r && r.ok) {
+        el.textContent = 'FOG OK';
+        el.style.background = '#d4edda';
+        el.style.color = '#155724';
+        loadSnapins();
+      } else {
+        el.textContent = 'FOG: ' + (r && r.error ? r.error : 'unreachable');
+        el.style.background = '#f8d7da';
+        el.style.color = '#721c24';
+      }
+    }).catch(function () {
+      var el = $('cfgState');
+      el.textContent = 'plugin endpoint unreachable';
+      el.style.background = '#f8d7da';
+      el.style.color = '#721c24';
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

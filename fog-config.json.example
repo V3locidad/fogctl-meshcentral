@@ -1,0 +1,6 @@
+{
+  "fogUrl": "http://fog.local",
+  "apiToken": "PUT_FOG_API_TOKEN_HERE",
+  "userToken": "PUT_FOG_USER_TOKEN_HERE",
+  "rejectUnauthorized": true
+}

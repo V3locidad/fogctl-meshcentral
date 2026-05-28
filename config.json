@@ -1,0 +1,14 @@
+{
+  "name": "fogctl",
+  "shortName": "fogctl",
+  "version": "0.0.1",
+  "author": "V3locidad",
+  "description": "Trigger FOG Project tasks (deploy, capture, snapin) on MeshCentral devices",
+  "hasAdminPanel": true,
+  "homepage": "https://github.com/V3locidad/fogctl-meshcentral",
+  "changelogUrl": "https://raw.githubusercontent.com/V3locidad/fogctl-meshcentral/main/changelog.md",
+  "configUrl": "https://raw.githubusercontent.com/V3locidad/fogctl-meshcentral/main/config.json",
+  "downloadUrl": "https://github.com/V3locidad/fogctl-meshcentral/archive/refs/heads/main.zip",
+  "repository": { "type": "git", "url": "https://github.com/V3locidad/fogctl-meshcentral.git" },
+  "meshCentralCompat": ">=1.1.0"
+}
