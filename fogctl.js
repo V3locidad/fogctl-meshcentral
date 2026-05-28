@@ -225,6 +225,8 @@ module.exports.fogctl = function (parent) {
             if (!ids.length) return sendJson(res, 400, { error: 'no host ids' });
             var overrideImg = (action === 'deploy' && req.query.imageId) ? req.query.imageId : null;
             var scheduledFor = req.query.scheduledFor || null;
+            var wantWol = req.query.wol === '1';
+            var wantShutdown = req.query.shutdown === '1';
             var out = {};
             var qq = ids.slice();
             function step() {
@@ -232,9 +234,6 @@ module.exports.fogctl = function (parent) {
                 var id = qq.shift();
                 var endpoint, body;
                 if (scheduledFor) {
-                    // FOG 1.5.x scheduled tasks: POST /fog/scheduledtask/create
-                    // hostID is required, scheduleType=S means single (one-shot).
-                    // scheduleTimeStamp is a Unix timestamp.
                     var ts = Math.floor(Date.parse(scheduledFor.replace(' ', 'T')) / 1000);
                     endpoint = '/fog/scheduledtask/create';
                     body = {
@@ -245,12 +244,13 @@ module.exports.fogctl = function (parent) {
                         scheduleTimeStamp: ts,
                         isActive: 1
                     };
-                    if (overrideImg) body.imageID = overrideImg;
                 } else {
                     endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
                     body = { taskTypeID: taskType };
-                    if (overrideImg) body.imageID = overrideImg;
                 }
+                if (overrideImg) body.imageID = overrideImg;
+                if (wantWol) body.wol = true;
+                if (wantShutdown) body.shutdown = true;
                 fogCall('POST', endpoint, body)
                     .then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                     .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
@@ -287,6 +287,8 @@ module.exports.fogctl = function (parent) {
             var snapinId = req.query.snapinId;
             var ids2 = (req.query.hostIds || '').split(',').filter(Boolean);
             var snapinSchedFor = req.query.scheduledFor || null;
+            var snapinWol = req.query.wol === '1';
+            var snapinShutdown = req.query.shutdown === '1';
             if (!snapinId) return sendJson(res, 400, { error: 'snapinId required' });
             if (!ids2.length) return sendJson(res, 400, { error: 'no host ids' });
             var out2 = {};
@@ -295,18 +297,26 @@ module.exports.fogctl = function (parent) {
                 return fogCall('POST', '/fog/snapinassociation/create', { snapinID: snapinId, hostID: hostId })
                     .catch(function () { return null; })
                     .then(function () {
+                        var b;
+                        var ep;
                         if (snapinSchedFor) {
                             var ts = Math.floor(Date.parse(snapinSchedFor.replace(' ', 'T')) / 1000);
-                            return fogCall('POST', '/fog/scheduledtask/create', {
+                            ep = '/fog/scheduledtask/create';
+                            b = {
                                 name: 'fogctl snapin ' + snapinSchedFor,
                                 hostID: parseInt(hostId, 10),
                                 taskTypeID: 12,
                                 scheduleType: 'S',
                                 scheduleTimeStamp: ts,
                                 isActive: 1
-                            });
+                            };
+                        } else {
+                            ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
+                            b = { taskTypeID: 12 };
                         }
-                        return fogCall('POST', '/fog/host/' + encodeURIComponent(hostId) + '/task', { taskTypeID: 12 });
+                        if (snapinWol) b.wol = true;
+                        if (snapinShutdown) b.shutdown = true;
+                        return fogCall('POST', ep, b);
                     });
             }
             function stepS() {

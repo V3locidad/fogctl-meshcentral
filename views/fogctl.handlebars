@@ -50,6 +50,8 @@
     Snapin: <select id="snapinSel"><option>loading…</option></select>
   </span>
   <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
+  <label style="margin-left:8px" title="Send a Wake-on-LAN magic packet before the task — useful for offline hosts"><input type="checkbox" id="optWol"> WoL</label>
+  <label title="Shut down the host after the task completes"><input type="checkbox" id="optShutdown"> Shutdown after</label>
   <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
   <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
   <button id="runBtn" class="primary">Run on selected</button>
@@ -397,10 +399,14 @@
         alert('None of the selected computers are known to FOG.');
         return;
       }
+      var flags = [];
+      if ($('optWol').checked) flags.push('WoL');
+      if ($('optShutdown').checked) flags.push('shutdown after');
       var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ')) : '';
       var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
               + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '')
-              + when;
+              + when
+              + (flags.length ? ' [' + flags.join(', ') + ']' : '');
       if (!confirm(msg + '. Continue?')) return;
 
       $('progress').textContent = '0/' + hostIds.length;
@@ -431,6 +437,10 @@
         if (when.getTime() < Date.now() + 30000) { alert('Pick a date in the future.'); return; }
         extra.scheduledFor = ts.replace('T', ' ');
       }
+
+      // Per-task flags
+      if ($('optWol').checked) extra.wol = '1';
+      if ($('optShutdown').checked) extra.shutdown = '1';
 
       extra.hostIds = hostIds.join(',');
       api(apiAction, extra).then(function (r) {
