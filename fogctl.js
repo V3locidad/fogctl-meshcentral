@@ -238,30 +238,6 @@ module.exports.fogctl = function (parent) {
             return step();
         }
 
-        // -------- clientVersion: get the FOG client version expected by this FOG server --------
-        // Strategy: try a few well-known FOG endpoints that expose the client version,
-        // then fall back to a manual override in fog-config.json (targetClientVersion).
-        if (action === 'clientVersion') {
-            var cfgCV = loadConfig();
-            var manual = cfgCV && cfgCV.targetClientVersion;
-            // /service/getversion.php?clientver returns plain text like "0.13.0"
-            return fogCall('GET', '/service/getversion.php?clientver')
-                .then(function (r) {
-                    var v = (r.data && r.data.raw) || (typeof r.data === 'string' ? r.data : null);
-                    if (v && /^[0-9]/.test(String(v).trim())) {
-                        sendJson(res, 200, { version: String(v).trim(), source: 'fog-server' });
-                    } else if (manual) {
-                        sendJson(res, 200, { version: manual, source: 'config' });
-                    } else {
-                        sendJson(res, 200, { version: null, source: null, hint: 'set targetClientVersion in fog-config.json' });
-                    }
-                })
-                .catch(function () {
-                    if (manual) return sendJson(res, 200, { version: manual, source: 'config' });
-                    sendJson(res, 200, { version: null, source: null, hint: 'set targetClientVersion in fog-config.json' });
-                });
-        }
-
         // -------- imageList: list FOG images for the deploy override dropdown --------
         if (action === 'imageList') {
             return fogCall('GET', '/fog/image')

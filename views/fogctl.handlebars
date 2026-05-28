@@ -51,7 +51,7 @@
     Snapin: <select id="snapinSel"><option>loading…</option></select>
   </span>
   <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
-  <button id="checkClientBtn" title="Read the installed FOG Client version on each selected online host">Check FOG client</button>
+  <button id="reinstallBtn" class="danger" title="Reinstall the latest FOG client (uninstalls existing + installs from this FOG server)">Reinstall FOG client</button>
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
@@ -88,8 +88,7 @@
     snapins: [],
     images: [],
     taskMap: {},  // hostID -> { type, label, percent, state }
-    clientVerMap: {},  // nodeId -> 'x.y.z' | 'NOT_INSTALLED' | 'OFFLINE' | 'CHECKING' | 'ERR'
-    targetClientVer: null  // string, populated from server
+    fogUrl: null  // string, set from ping response — used to template the reinstall PS
 
   };
 
@@ -216,25 +215,12 @@
         var pct = (task.percent != null) ? (' ' + task.percent + '%') : '';
         taskBadge = '<span class="fog-status pend">' + escapeHtml(task.label + pct) + '</span>';
       }
-      var cv = state.clientVerMap[n.id];
-      var cvBadge = '';
-      if (cv) {
-        if (cv === 'CHECKING') cvBadge = '<span class="fog-status pend">FOG client: …</span>';
-        else if (cv === 'OFFLINE') cvBadge = '<span class="fog-status none">offline</span>';
-        else if (cv === 'NOT_INSTALLED') cvBadge = '<span class="fog-status none">FOG client: none</span>';
-        else if (cv === 'ERR' || cv === 'TIMEOUT') cvBadge = '<span class="fog-status bad">FOG client: ' + cv.toLowerCase() + '</span>';
-        else {
-          var cls = (state.targetClientVer && cv === state.targetClientVer) ? 'ok' : 'bad';
-          cvBadge = '<span class="fog-status ' + cls + '">FOG client: ' + escapeHtml(cv) + '</span>';
-        }
-      }
       html += '<div class="row" data-nid="' + n.id + '">'
             + '<input type="checkbox" data-nid="' + n.id + '"' + ck + '>'
             + '<span class="dot ' + (n.online ? 'on' : 'off') + '"></span>'
             + escapeHtml(n.name)
             + status
             + taskBadge
-            + cvBadge
             + '</div>';
     });
     $('nodeList').innerHTML = html;
@@ -312,152 +298,71 @@
 
   // Poll FOG for active tasks. We build a map: nodeId -> task info, by reverse-
   // mapping FOG host id -> nodeId via the fogMap we already built.
-  // -------- MeshCentral runcommands plumbing --------
-  // Send a PowerShell snippet to a single MeshAgent and capture its stdout. We
-  // identify the response by the unique sentinel we ask the script to print.
-  // Reading meshserver from the parent frame: MeshCentral exposes the WebSocket
-  // wrapper there as `meshserver` (same object the device console uses).
+  // -------- MeshCentral runcommands (fire-and-forget) --------
+  // We send a PowerShell snippet to one or more MeshAgents via meshserver.send().
+  // We do NOT try to capture the agent's reply: on this MC build the WS handler
+  // dispatches via a closure that is not reachable from a plugin iframe. The
+  // user verifies success out-of-band (FOG web UI, MC console, etc.).
   function meshserver() {
     try { return P.meshserver || P.window.meshserver; } catch (e) { return null; }
   }
 
-  var runCallbacks = {};  // sentinel -> { resolve, timer, buffer, nodeId }
-  var DEBUG = true;       // Set false later. When true, log to console.log every message we intercept.
-  function dbg() {
-    if (!DEBUG) return;
-    try { (P.console || console).log.apply(P.console || console, ['[FOGCTL]'].concat([].slice.call(arguments))); } catch (e) {}
-  }
-
-  function tryHandleReply(data) {
-    if (!data) return false;
-    // Accept many shapes — MeshCentral has evolved this over versions.
-    var value = data.value;
-    if (typeof value !== 'string') value = data.data;
-    if (typeof value !== 'string') value = data.result;
-    if (typeof value !== 'string') value = data.output;
-    if (typeof value !== 'string' && data.responses && data.responses[0]) value = data.responses[0].result || data.responses[0].value;
-    if (typeof value !== 'string') return false;
-    var nid = data.nodeid || data.nodeId || data.node || (data.responses && data.responses[0] && (data.responses[0].nodeid || data.responses[0].nodeId));
-    var matched = false;
-    Object.keys(runCallbacks).forEach(function (sent) {
-      var cb = runCallbacks[sent];
-      if (nid && cb.nodeId && nid !== cb.nodeId) return;
-      if (value.indexOf(sent) === -1) {
-        cb.buffer += value;
-        return;
-      }
-      cb.buffer += value;
-      var m = new RegExp('FOGCTL:' + sent + ':([^\\r\\n]*)').exec(cb.buffer);
-      var payload = m ? m[1].trim() : '';
-      dbg('matched sentinel', sent, 'payload:', payload, 'node:', nid);
-      clearTimeout(cb.timer);
-      delete runCallbacks[sent];
-      cb.resolve(payload);
-      matched = true;
-    });
-    return matched;
-  }
-
-  function ensureRunHook() {
+  function sendPowerShell(nodeIds, script) {
     var ms = meshserver();
-    if (!ms || ms.__fogctlHooked) return ms;
-    // MeshCentral exposes both onMessage and the internal xxOnMessage. We hook
-    // whichever exists, log everything in DEBUG, and try to match replies.
-    ['onMessage', 'xxOnMessage'].forEach(function (name) {
-      if (typeof ms[name] !== 'function') return;
-      var orig = ms[name];
-      ms[name] = function (data) {
-        try {
-          // Log EVERYTHING while we figure out the right reply format on this MC version.
-          // Truncate big payloads so the console stays usable.
-          var brief = data;
-          try {
-            var s = JSON.stringify(data);
-            if (s && s.length > 600) brief = s.slice(0, 600) + '…(+' + (s.length - 600) + ')';
-          } catch (_) {}
-          dbg('RX [' + name + ']', data && data.action, brief);
-          tryHandleReply(data);
-        } catch (e) { dbg('hook error', e); }
-        return orig.apply(ms, arguments);
-      };
-      dbg('hooked', name);
+    if (!ms || typeof ms.send !== 'function') return false;
+    ms.send({
+      action: 'runcommands',
+      nodeids: nodeIds,
+      type: 2,        // 2 = PowerShell
+      cmds: script,
+      runAsUser: 0,   // 0 = SYSTEM
+      reply: false
     });
-    ms.__fogctlHooked = true;
-    return ms;
+    return true;
   }
 
-  function runPowerShell(nodeId, script, timeoutMs) {
-    return new Promise(function (resolve) {
-      var ms = ensureRunHook();
-      if (!ms || typeof ms.send !== 'function') { dbg('no meshserver'); return resolve(null); }
-      var sent = 'S' + Math.random().toString(36).slice(2, 10);
-      var wrapped = script + '\nWrite-Host ("FOGCTL:' + sent + ':" + $FOGCTL_RESULT)\n';
-      var timer = setTimeout(function () {
-        dbg('timeout sentinel', sent, 'node', nodeId, 'buffer:', (runCallbacks[sent] && runCallbacks[sent].buffer) || '');
-        delete runCallbacks[sent];
-        resolve(null);
-      }, timeoutMs || 25000);
-      runCallbacks[sent] = { resolve: resolve, timer: timer, buffer: '', nodeId: nodeId };
-      var msg = {
-        action: 'runcommands',
-        nodeids: [nodeId],
-        type: 2,        // 2 = PowerShell
-        cmds: wrapped,
-        runAsUser: 0,   // 0 = SYSTEM
-        reply: true
-      };
-      dbg('TX runcommands', { sentinel: sent, nodeId: nodeId, type: msg.type, runAsUser: msg.runAsUser });
-      ms.send(msg);
-    });
-  }
-
-  // PowerShell that reads the FOG client version. Stores the result in $FOGCTL_RESULT
-  // which runPowerShell wraps with the sentinel line.
-  var FOG_VERSION_PS = [
-    '$paths = @(',
-    '  "C:\\Program Files (x86)\\FOG\\FOGService.exe",',
-    '  "C:\\Program Files\\FOG\\FOGService.exe"',
-    ')',
-    '$found = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1',
-    'if ($found) {',
-    '  try { $FOGCTL_RESULT = (Get-Item $found).VersionInfo.FileVersion } catch { $FOGCTL_RESULT = "ERR" }',
-    '} else {',
-    '  $FOGCTL_RESULT = "NOT_INSTALLED"',
-    '}'
+  // PowerShell that uninstalls any FOG client and reinstalls the latest
+  // SmartInstaller from this FOG server. Runs as SYSTEM. The {{FOG_URL}}
+  // placeholder is replaced just before sending.
+  var FOG_REINSTALL_PS = [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    '$fogUrl = "{{FOG_URL}}"',
+    '$installerUrl = "$fogUrl/fog/client/download.php?newclient"',
+    '$workDir = "$env:ProgramData\\fogctl"',
+    'New-Item -ItemType Directory -Force -Path $workDir | Out-Null',
+    '$dest = Join-Path $workDir "SmartInstaller.exe"',
+    '# Accept self-signed certs (common on internal FOG servers).',
+    '[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}',
+    'try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls } catch {}',
+    '# Stop the existing FOG service if any.',
+    '$svc = Get-Service -Name "FOGService" -ErrorAction SilentlyContinue',
+    'if ($svc) { Stop-Service $svc -Force }',
+    '# Uninstall any installed FOG product (best effort, Win32_Product is slow but reliable).',
+    '$installed = Get-WmiObject -Class Win32_Product -Filter "Name LIKE \'%FOG%\'"',
+    'foreach ($p in $installed) { $p.Uninstall() | Out-Null }',
+    '# Download the latest installer.',
+    'Invoke-WebRequest -Uri $installerUrl -OutFile $dest -UseBasicParsing',
+    '# Install silently.',
+    'Start-Process -FilePath $dest -ArgumentList "/S" -Wait -NoNewWindow'
   ].join("\n");
 
-  function checkFogClientVersions() {
+  function reinstallFogClient() {
     var ids = selectedNodeIds();
-    if (!ids.length) ids = visibleNodes().map(function (n) { return n.id; });
+    if (!ids.length) { alert('Select at least one computer first.'); return; }
     var nodesById = {};
     state.nodes.forEach(function (n) { nodesById[n.id] = n; });
     var online = ids.filter(function (id) { return nodesById[id] && nodesById[id].online; });
     var offline = ids.length - online.length;
-    if (!online.length) { log('No online nodes to check.'); return; }
-    log('Checking FOG client on ' + online.length + ' node(s)' + (offline ? ' (' + offline + ' offline skipped)' : '') + '…');
-    online.forEach(function (id) { state.clientVerMap[id] = 'CHECKING'; });
-    renderNodes();
-
-    // Run sequentially in small batches to avoid flooding meshserver.
-    var queue = online.slice();
-    var concurrency = 5;
-    var done = 0;
-    function next() {
-      if (!queue.length) return;
-      while (queue.length && Object.keys(runCallbacks).length < concurrency) {
-        var id = queue.shift();
-        (function (nid) {
-          runPowerShell(nid, FOG_VERSION_PS, 30000).then(function (out) {
-            done++;
-            state.clientVerMap[nid] = out ? out : 'TIMEOUT';
-            renderNodes();
-            if (done >= online.length) log('FOG client check done.');
-            next();
-          });
-        })(id);
-      }
-    }
-    next();
+    if (!online.length) { alert('No online computer in the selection.'); return; }
+    if (!state.fogUrl) { alert('FOG server URL is not known yet (ping has not returned).'); return; }
+    var msg = 'Reinstall the FOG client on ' + online.length + ' computer(s)?'
+            + (offline ? '\n(' + offline + ' offline will be skipped)' : '')
+            + '\n\nThis stops the FOG service, uninstalls the existing client and installs the latest from ' + state.fogUrl + '.';
+    if (!confirm(msg)) return;
+    var script = FOG_REINSTALL_PS.replace('{{FOG_URL}}', state.fogUrl);
+    var ok = sendPowerShell(online, script);
+    if (!ok) { log('Could not access meshserver — reinstall not sent.'); return; }
+    log('Reinstall command sent to ' + online.length + ' computer(s). Check FOG web UI in a few minutes to confirm clients reconnect.');
   }
 
   function pollActiveTasks() {
@@ -585,7 +490,7 @@
     $('groupSearch').oninput = renderGroups;
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
-    $('checkClientBtn').onclick = function () { showLogs(true); checkFogClientVersions(); };
+    $('reinstallBtn').onclick = function () { showLogs(true); reinstallFogClient(); };
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); };
     $('actionSel').onchange = function () {
@@ -603,18 +508,9 @@
         el.textContent = 'FOG OK';
         el.style.background = '#d4edda';
         el.style.color = '#155724';
+        state.fogUrl = r.fogUrl || null;
         loadImages();
         loadSnapins();
-        // Best-effort target client version. If FOG doesn't expose it, the badges
-        // will still show the installed version but won't colour-code OK/outdated.
-        api('clientVersion').then(function (r) {
-          if (r && r.version) {
-            state.targetClientVer = r.version;
-            log('Target FOG client version: ' + r.version + ' (from ' + r.source + ')');
-          } else if (r && r.hint) {
-            log('Target FOG client version unknown — ' + r.hint);
-          }
-        }).catch(function () {});
         autoResolveSoon();
         pollActiveTasks();
         setInterval(pollActiveTasks, 8000);
