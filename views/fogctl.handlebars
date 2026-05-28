@@ -41,10 +41,13 @@
     <option value="capture">Capture image</option>
     <option value="snapin">Run snapin</option>
   </select>
-  <span id="snapinWrap" style="display:none">
-    <select id="snapinSel"><option>loading…</option></select>
+  <span id="imageWrap" style="display:none">
+    Image: <select id="imageSel"><option value="">Default (per host)</option></select>
   </span>
-  <button id="lookupBtn">Resolve FOG hosts</button>
+  <span id="snapinWrap" style="display:none">
+    Snapin: <select id="snapinSel"><option>loading…</option></select>
+  </span>
+  <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
@@ -78,7 +81,8 @@
     selectedGroup: null,
     checkedNodes: {},   // nodeid -> true
     fogMap: {},         // nodeid -> { hostId, name, image } or null
-    snapins: []
+    snapins: [],
+    images: []
   };
 
   function $(id) { return document.getElementById(id); }
@@ -170,6 +174,7 @@
         state.selectedGroup = (gid === '__all__') ? null : gid;
         renderGroups();
         renderNodes();
+        autoResolveSoon();
       };
     });
   }
@@ -243,25 +248,51 @@
     return Object.keys(state.checkedNodes);
   }
 
-  function lookupSelected() {
-    var ids = selectedNodeIds();
-    if (!ids.length) { alert('No computer selected.'); return Promise.resolve(); }
+  // Resolve a specific list of nodes (default: all visible nodes that aren't already resolved).
+  // `force=true` re-resolves everything and refreshes the server-side FOG host cache.
+  function resolveNodes(nodeList, force) {
     var items = [];
-    ids.forEach(function (id) {
-      var n = state.nodes.find(function (x) { return x.id === id; });
-      if (!n) return;
-      // FOG match works on MAC OR hostname; we send both so the server can fall back.
-      items.push(encodeURIComponent(id) + '|' + encodeURIComponent(n.mac || '') + '|' + encodeURIComponent(n.name || ''));
+    nodeList.forEach(function (n) {
+      if (!force && state.fogMap[n.id] !== undefined) return;
+      items.push(encodeURIComponent(n.id) + '|' + encodeURIComponent(n.mac || '') + '|' + encodeURIComponent(n.name || ''));
     });
-    if (!items.length) { log('No nodes to look up.'); return Promise.resolve(); }
-    log('Looking up ' + items.length + ' node(s) in FOG…');
-    return api('lookupBulk', { items: items.join(',') }).then(function (r) {
+    if (!items.length) return Promise.resolve();
+    var params = { items: items.join(',') };
+    if (force) params.refresh = '1';
+    log('Resolving ' + items.length + ' node(s) against FOG…');
+    return api('lookupBulk', params).then(function (r) {
       Object.keys(r).forEach(function (nid) { state.fogMap[nid] = r[nid]; });
       var matched = Object.keys(r).filter(function (k) { return r[k]; }).length;
-      var byName = Object.keys(r).filter(function (k) { return r[k] && r[k].matchedBy === 'name'; }).length;
-      log('FOG lookup: ' + matched + '/' + items.length + ' matched' + (byName ? ' (' + byName + ' by hostname)' : '') + '.');
+      log('FOG: ' + matched + '/' + items.length + ' matched.');
       renderNodes();
     });
+  }
+
+  function lookupSelected() {
+    return resolveNodes(visibleNodes(), true);
+  }
+
+  // Kick off auto-resolution for the currently visible nodes. Debounced to avoid
+  // calls during quick group switching.
+  var resolveTimer = null;
+  function autoResolveSoon() {
+    if (resolveTimer) clearTimeout(resolveTimer);
+    resolveTimer = setTimeout(function () { resolveNodes(visibleNodes(), false); }, 250);
+  }
+
+  function loadImages() {
+    return api('imageList').then(function (r) {
+      state.images = r.images || [];
+      var sel = $('imageSel');
+      // Preserve the "Default (per host)" entry.
+      sel.innerHTML = '<option value="">Default (per host)</option>';
+      state.images.forEach(function (im) {
+        var o = document.createElement('option');
+        o.value = im.id;
+        o.textContent = im.name + (im.os ? ' (' + im.os + ')' : '');
+        sel.appendChild(o);
+      });
+    }).catch(function (e) { log('imageList failed: ' + e.message); });
   }
 
   function loadSnapins() {
@@ -311,9 +342,13 @@
       log(msg);
 
       var apiAction, extra = {};
-      if (action === 'deploy') apiAction = 'deploy';
-      else if (action === 'capture') apiAction = 'capture';
-      else if (action === 'snapin') {
+      if (action === 'deploy') {
+        apiAction = 'deploy';
+        var imgId = $('imageSel').value;
+        if (imgId) extra.imageId = imgId;
+      } else if (action === 'capture') {
+        apiAction = 'capture';
+      } else if (action === 'snapin') {
         apiAction = 'snapinRun';
         var sid = $('snapinSel').value;
         if (!sid) { alert('Pick a snapin first.'); return; }
@@ -352,8 +387,12 @@
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); };
     $('actionSel').onchange = function () {
-      $('snapinWrap').style.display = ($('actionSel').value === 'snapin') ? '' : 'none';
+      var a = $('actionSel').value;
+      $('snapinWrap').style.display = (a === 'snapin') ? '' : 'none';
+      $('imageWrap').style.display  = (a === 'deploy') ? '' : 'none';
     };
+    // Trigger once so the initial Deploy selection shows its image dropdown.
+    $('actionSel').onchange();
 
     // Ping the FOG server through the plugin endpoint to surface config issues early.
     api('ping').then(function (r) {
@@ -362,7 +401,9 @@
         el.textContent = 'FOG OK';
         el.style.background = '#d4edda';
         el.style.color = '#155724';
+        loadImages();
         loadSnapins();
+        autoResolveSoon();
       } else {
         el.textContent = 'FOG: ' + (r && r.error ? r.error : 'unreachable');
         el.style.background = '#f8d7da';

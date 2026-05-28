@@ -216,20 +216,37 @@ module.exports.fogctl = function (parent) {
 
         // -------- deploy: schedule task type 1 on a list of FOG host ids --------
         // -------- capture: same but task type 2 --------
+        // Optional `imageId` overrides the host's assigned image (deploy only).
         if (action === 'deploy' || action === 'capture') {
             var taskType = (action === 'deploy') ? 1 : 2;
             var ids = (req.query.hostIds || '').split(',').filter(Boolean);
             if (!ids.length) return sendJson(res, 400, { error: 'no host ids' });
+            var overrideImg = (action === 'deploy' && req.query.imageId) ? req.query.imageId : null;
             var out = {};
             var qq = ids.slice();
             function step() {
                 if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
                 var id = qq.shift();
-                fogCall('POST', '/fog/host/' + encodeURIComponent(id) + '/task', { taskTypeID: taskType })
+                // FOG accepts an imageID override in the task body — the host's default image
+                // is left untouched.
+                var body = { taskTypeID: taskType };
+                if (overrideImg) body.imageID = overrideImg;
+                fogCall('POST', '/fog/host/' + encodeURIComponent(id) + '/task', body)
                     .then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                     .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
             return step();
+        }
+
+        // -------- imageList: list FOG images for the deploy override dropdown --------
+        if (action === 'imageList') {
+            return fogCall('GET', '/fog/image')
+                .then(function (r) {
+                    var arr = (r.data && r.data.images) || r.data || [];
+                    var simple = arr.map(function (im) { return { id: im.id, name: im.name, os: (im.os && im.os.name) || '' }; });
+                    sendJson(res, 200, { images: simple });
+                })
+                .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
         // -------- snapinList: list available snapins --------
