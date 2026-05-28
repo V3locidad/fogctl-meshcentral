@@ -10,7 +10,6 @@
   .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
   button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
   button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
-  button.danger { background: #c0392b; color: white; border-color: #c0392b; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .cols { display: flex; gap: 10px; }
   .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; min-height: 400px; max-height: 520px; overflow: auto; }
@@ -51,7 +50,6 @@
     Snapin: <select id="snapinSel"><option>loading…</option></select>
   </span>
   <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
-  <button id="reinstallBtn" class="danger" title="Reinstall the latest FOG client (uninstalls existing + installs from this FOG server)">Reinstall FOG client</button>
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
@@ -87,8 +85,7 @@
     fogMap: {},         // nodeid -> { hostId, name, image } or null
     snapins: [],
     images: [],
-    taskMap: {},  // hostID -> { type, label, percent, state }
-    fogUrl: null  // string, set from ping response — used to template the reinstall PS
+    taskMap: {}  // hostID -> { type, label, percent, state }
 
   };
 
@@ -323,112 +320,6 @@
 
   // Poll FOG for active tasks. We build a map: nodeId -> task info, by reverse-
   // mapping FOG host id -> nodeId via the fogMap we already built.
-  // -------- MeshCentral runcommands (fire-and-forget) --------
-  // We send a PowerShell snippet to one or more MeshAgents via meshserver.send().
-  // We do NOT try to capture the agent's reply: on this MC build the WS handler
-  // dispatches via a closure that is not reachable from a plugin iframe. The
-  // user verifies success out-of-band (FOG web UI, MC console, etc.).
-  function meshserver() {
-    try { return P.meshserver || P.window.meshserver; } catch (e) { return null; }
-  }
-
-  function sendPowerShell(nodeIds, script) {
-    var ms = meshserver();
-    if (!ms || typeof ms.send !== 'function') return false;
-    ms.send({
-      action: 'runcommands',
-      nodeids: nodeIds,
-      type: 2,        // 2 = PowerShell
-      cmds: script,
-      runAsUser: 0,   // 0 = SYSTEM
-      reply: false
-    });
-    return true;
-  }
-
-  // PowerShell that uninstalls any FOG client and reinstalls the latest
-  // SmartInstaller from this FOG server. Runs as SYSTEM. The {{FOG_URL}}
-  // placeholder is replaced just before sending.
-  // Every step wraps its potentially-throwing API call in try/catch so a hostile
-  // .NET version on one machine cannot abort the whole sequence.
-  var FOG_REINSTALL_PS = [
-    '$ErrorActionPreference = "Continue"',
-    '$fogUrl = "{{FOG_URL}}"',
-    '$workDir = "$env:ProgramData\\fogctl"',
-    'New-Item -ItemType Directory -Force -Path $workDir | Out-Null',
-    '$dest = Join-Path $workDir "SmartInstaller.exe"',
-    '$logFile = Join-Path $workDir "install.log"',
-    'function Log($m) { ("[{0}] {1}" -f (Get-Date -Format s), $m) | Add-Content -Path $logFile }',
-    'Log "=== fogctl reinstall start ==="',
-    'Log "PowerShell version: $($PSVersionTable.PSVersion)"',
-    'Log "FOG URL: $fogUrl"',
-    'if ([string]::IsNullOrEmpty($fogUrl)) { Log "ABORT: FOG URL is empty — nothing to download from"; return }',
-    'try { [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}; Log "TLS validation bypassed" } catch { Log "TLS bypass failed: $_" }',
-    'try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls; Log "TLS protocols set" } catch { Log "TLS protocol set failed: $_" }',
-    'try { $svc = Get-Service -Name "FOGService" -ErrorAction SilentlyContinue; if ($svc) { Stop-Service $svc -Force; Log "FOGService stopped" } else { Log "FOGService not present" } } catch { Log "Stop-Service step failed: $_" }',
-    'try {',
-    '  $installed = Get-WmiObject -Class Win32_Product -Filter "Name LIKE \'%FOG%\'"',
-    '  if ($installed) { foreach ($p in $installed) { Log ("Uninstalling " + $p.Name + " " + $p.Version); $p.Uninstall() | Out-Null } } else { Log "No FOG product found by WMI" }',
-    '} catch { Log "Uninstall step failed: $_" }',
-    '$candidates = @( "$fogUrl/fog/client/download.php", "$fogUrl/fog/client/download.php?newclient", "$fogUrl/fog/client/SmartInstaller.exe", "$fogUrl/client/download.php", "$fogUrl/client/SmartInstaller.exe" )',
-    '$downloaded = $false',
-    'foreach ($u in $candidates) {',
-    '  try {',
-    '    Log "Downloading from $u"',
-    '    Invoke-WebRequest -Uri $u -OutFile $dest -UseBasicParsing -ErrorAction Stop',
-    '    $size = (Get-Item $dest).Length',
-    '    Log "Got $size bytes"',
-    '    if ($size -lt 100000) { Log "Too small, likely an error page, trying next URL"; continue }',
-    '    $head = [System.IO.File]::ReadAllBytes($dest)[0..1]',
-    '    if ($head[0] -ne 0x4D -or $head[1] -ne 0x5A) { Log "Not a PE/EXE (no MZ header), trying next URL"; continue }',
-    '    Log "Valid installer downloaded from $u"',
-    '    $downloaded = $true; break',
-    '  } catch { Log "Download failed for $u : $_" }',
-    '}',
-    'if (-not $downloaded) { Log "Could not obtain a valid SmartInstaller — giving up"; return }',
-    'try {',
-    '  Log "Launching installer with /S"',
-    '  $proc = Start-Process -FilePath $dest -ArgumentList "/S" -Wait -PassThru -NoNewWindow',
-    '  Log "Installer exited with code $($proc.ExitCode)"',
-    '} catch { Log "Start-Process failed: $_" }',
-    'Start-Sleep -Seconds 3',
-    'try { $svc2 = Get-Service -Name "FOGService" -ErrorAction SilentlyContinue; if ($svc2) { Log ("FOGService status after install: " + $svc2.Status) } else { Log "FOGService missing after install" } } catch { Log "Final check failed: $_" }',
-    'Log "=== fogctl reinstall end ==="'
-  ].join("\n");
-
-  function reinstallFogClient() {
-    var ids = selectedNodeIds();
-    if (!ids.length) { alert('Select at least one computer first.'); return; }
-    var nodesById = {};
-    state.nodes.forEach(function (n) { nodesById[n.id] = n; });
-    var online = ids.filter(function (id) { return nodesById[id] && nodesById[id].online; });
-    var offline = ids.length - online.length;
-    if (!online.length) { alert('No online computer in the selection.'); return; }
-
-    // Always re-confirm FOG URL via a fresh ping. state.fogUrl can be stale if
-    // the iframe was reloaded after the original ping or if ping had not yet
-    // returned. This avoids shipping a script with an empty $fogUrl.
-    api('ping').then(function (r) {
-      var fogUrl = (r && r.ok && r.fogUrl) || state.fogUrl;
-      if (!fogUrl) {
-        alert('FOG server URL is unknown — check fog-config.json on the MeshCentral host.');
-        return;
-      }
-      state.fogUrl = fogUrl;
-      var msg = 'Reinstall the FOG client on ' + online.length + ' computer(s)?'
-              + (offline ? '\n(' + offline + ' offline will be skipped)' : '')
-              + '\n\nThis stops the FOG service, uninstalls the existing client and installs the latest from ' + fogUrl + '.';
-      if (!confirm(msg)) return;
-      var script = FOG_REINSTALL_PS.split('{{FOG_URL}}').join(fogUrl);
-      log('Reinstall: using FOG URL ' + fogUrl);
-      var ok = sendPowerShell(online, script);
-      if (!ok) { log('Could not access meshserver — reinstall not sent.'); return; }
-      log('Reinstall command sent to ' + online.length + ' computer(s). Check FOG web UI in a few minutes to confirm clients reconnect.');
-    }).catch(function (e) {
-      alert('Could not contact MeshCentral plugin endpoint: ' + (e && e.message ? e.message : e));
-    });
-  }
-
   function pollActiveTasks() {
     api('activeTasks').then(function (r) {
       var byFogHost = (r && r.byHost) || {};
@@ -554,7 +445,6 @@
     $('groupSearch').oninput = renderGroups;
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
-    $('reinstallBtn').onclick = function () { showLogs(true); reinstallFogClient(); };
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); };
     $('actionSel').onchange = function () {
@@ -572,7 +462,6 @@
         el.textContent = 'FOG OK';
         el.style.background = '#d4edda';
         el.style.color = '#155724';
-        state.fogUrl = r.fogUrl || null;
         loadImages();
         loadSnapins();
         autoResolveSoon();
