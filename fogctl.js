@@ -240,6 +240,10 @@ module.exports.fogctl = function (parent) {
                         name: 'fogctl ' + action + ' ' + scheduledFor,
                         hostID: parseInt(id, 10),
                         taskTypeID: taskType,
+                        // FOG's ScheduledTask requires 'type' = S/C/... (schedule
+                        // kind), separately from taskTypeID. Both fields are
+                        // mandatory in 1.5.x.
+                        type: 'S',
                         scheduleType: 'S',
                         scheduleTimeStamp: ts,
                         isActive: 1
@@ -306,6 +310,7 @@ module.exports.fogctl = function (parent) {
                                 name: 'fogctl snapin ' + snapinSchedFor,
                                 hostID: parseInt(hostId, 10),
                                 taskTypeID: 12,
+                                type: 'S',
                                 scheduleType: 'S',
                                 scheduleTimeStamp: ts,
                                 isActive: 1
