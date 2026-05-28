@@ -240,12 +240,17 @@ module.exports.fogctl = function (parent) {
                         name: 'fogctl ' + action + ' ' + scheduledFor,
                         hostID: parseInt(id, 10),
                         taskTypeID: taskType,
-                        // FOG ScheduledTask: 'type' is the schedule kind (S/C),
-                        // 'runtime' is the Unix timestamp for one-shot ('S').
                         type: 'S',
                         scheduleType: 'S',
+                        // FOG's web form posts the one-shot datetime as
+                        // 'scheduleSingle' in "YYYY-MM-DD HH:MM" format. We send
+                        // a few aliases so the API picks whichever the build
+                        // expects.
+                        scheduleSingle: scheduledFor,
+                        scheduleSingleTime: scheduledFor,
+                        scheduleStartDate: scheduledFor,
                         runtime: ts,
-                        scheduleTimeStamp: ts,
+                        stRuntime: ts,
                         isActive: 1
                     };
                 } else {
@@ -312,8 +317,11 @@ module.exports.fogctl = function (parent) {
                                 taskTypeID: 12,
                                 type: 'S',
                                 scheduleType: 'S',
+                                scheduleSingle: snapinSchedFor,
+                                scheduleSingleTime: snapinSchedFor,
+                                scheduleStartDate: snapinSchedFor,
                                 runtime: ts,
-                                scheduleTimeStamp: ts,
+                                stRuntime: ts,
                                 isActive: 1
                             };
                         } else {
