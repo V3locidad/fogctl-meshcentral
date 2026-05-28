@@ -206,7 +206,7 @@
       var ck = state.checkedNodes[n.id] ? ' checked' : '';
       var fog = state.fogMap[n.id];
       var status = '';
-      if (fog === undefined) status = '<span class="fog-status pend">?</span>';
+      if (fog === undefined) status = '<span class="fog-status none">…</span>';
       else if (fog === null) status = '<span class="fog-status miss">no FOG host</span>';
       else status = '<span class="fog-status match">FOG #' + fog.id + (fog.image ? ' • ' + escapeHtml(fog.image) : '') + '</span>';
       var task = state.taskMap[n.id];
@@ -264,8 +264,13 @@
     return Object.keys(state.checkedNodes);
   }
 
-  // Resolve a specific list of nodes (default: all visible nodes that aren't already resolved).
-  // `force=true` re-resolves everything and refreshes the server-side FOG host cache.
+  // Resolve a specific list of nodes against FOG (default: visible nodes not yet
+  // resolved). `force=true` re-resolves everything and refreshes the FOG host
+  // cache on the server side.
+  //
+  // We batch in chunks of ~50 items because each entry encodes a full
+  // "node//<hash>" identifier — past a couple hundred nodes the URL crosses
+  // typical 8 KB limits and the request is silently rejected by the proxy.
   function resolveNodes(nodeList, force) {
     var items = [];
     nodeList.forEach(function (n) {
@@ -273,15 +278,35 @@
       items.push(encodeURIComponent(n.id) + '|' + encodeURIComponent(n.mac || '') + '|' + encodeURIComponent(n.name || ''));
     });
     if (!items.length) return Promise.resolve();
-    var params = { items: items.join(',') };
-    if (force) params.refresh = '1';
-    log('Resolving ' + items.length + ' node(s) against FOG…');
-    return api('lookupBulk', params).then(function (r) {
-      Object.keys(r).forEach(function (nid) { state.fogMap[nid] = r[nid]; });
-      var matched = Object.keys(r).filter(function (k) { return r[k]; }).length;
-      log('FOG: ' + matched + '/' + items.length + ' matched.');
-      renderNodes();
-    });
+    var total = items.length;
+    log('Resolving ' + total + ' node(s) against FOG…');
+
+    var chunks = [];
+    for (var i = 0; i < items.length; i += 50) chunks.push(items.slice(i, i + 50));
+
+    var matched = 0;
+    var failed = 0;
+    var first = true;
+
+    function runChunk(chunk) {
+      var params = { items: chunk.join(',') };
+      if (force && first) { params.refresh = '1'; first = false; }
+      return api('lookupBulk', params).then(function (r) {
+        Object.keys(r).forEach(function (nid) {
+          state.fogMap[nid] = r[nid];
+          if (r[nid]) matched++;
+        });
+        renderNodes();
+      }).catch(function (e) {
+        failed += chunk.length;
+        log('lookup chunk failed: ' + (e && e.message ? e.message : e));
+      });
+    }
+
+    return chunks.reduce(function (p, c) { return p.then(function () { return runChunk(c); }); }, Promise.resolve())
+      .then(function () {
+        log('FOG: ' + matched + '/' + total + ' matched' + (failed ? ' (' + failed + ' failed)' : '') + '.');
+      });
   }
 
   function lookupSelected() {
