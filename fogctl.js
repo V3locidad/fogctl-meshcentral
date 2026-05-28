@@ -93,18 +93,46 @@ module.exports.fogctl = function (parent) {
         return String(m).toLowerCase().replace(/[^0-9a-f]/g, '');
     }
 
-    // Search a FOG host by MAC. FOG accepts the raw MAC string.
+    // Local host cache: avoids hammering FOG when several lookups run in a row.
+    // We refresh whenever the cache is older than CACHE_TTL_MS.
+    var hostCache = { at: 0, hosts: [], macMap: {} };
+    var CACHE_TTL_MS = 30 * 1000;
+
+    function buildMacMap(hosts) {
+        var map = {};
+        hosts.forEach(function (h) {
+            if (h.primac) map[normalizeMac(h.primac)] = h;
+            if (Array.isArray(h.macs)) {
+                h.macs.forEach(function (m) {
+                    var k = normalizeMac(m);
+                    if (k) map[k] = h;
+                });
+            }
+        });
+        return map;
+    }
+
+    // The search endpoint in FOG 1.5.x is finicky across builds: in practice the
+    // most reliable approach is to pull the full host list once and resolve MACs
+    // locally. A few hundred to a few thousand hosts is trivial for both sides.
+    function getAllHosts(force) {
+        var now = Date.now();
+        if (!force && (now - hostCache.at) < CACHE_TTL_MS && hostCache.hosts.length) {
+            return Promise.resolve(hostCache);
+        }
+        return fogCall('GET', '/fog/host').then(function (r) {
+            var arr = (r.data && r.data.hosts) || [];
+            hostCache = { at: Date.now(), hosts: arr, macMap: buildMacMap(arr) };
+            return hostCache;
+        });
+    }
+
     function findHostByMac(mac) {
         var clean = normalizeMac(mac);
         if (clean.length !== 12) return Promise.resolve(null);
-        var pretty = clean.match(/.{2}/g).join(':');
-        return fogCall('POST', '/fog/host/search', { mac: pretty })
-            .then(function (r) {
-                var hosts = (r.data && r.data.hosts) || r.data || [];
-                if (!hosts.length) return null;
-                return hosts[0];
-            })
-            .catch(function () { return null; });
+        return getAllHosts(false).then(function (cache) {
+            return cache.macMap[clean] || null;
+        }).catch(function () { return null; });
     }
 
     obj.server_startup = function () {};
@@ -150,20 +178,17 @@ module.exports.fogctl = function (parent) {
             }).catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- bulk lookup: array of MACs --------
+        // -------- bulk lookup: resolve N MACs in one shot using the cached host list --------
         if (action === 'lookupBulk') {
             var macs = (req.query.macs || '').split(',').filter(Boolean);
-            var results = {};
-            var queue = macs.slice();
-            function next() {
-                if (!queue.length) return sendJson(res, 200, results);
-                var m = queue.shift();
-                return findHostByMac(m).then(function (h) {
+            return getAllHosts(req.query.refresh === '1').then(function (cache) {
+                var results = {};
+                macs.forEach(function (m) {
+                    var h = cache.macMap[normalizeMac(m)];
                     results[m] = h ? { id: h.id, name: h.name, image: h.imagename || (h.image && h.image.name) } : null;
-                    next();
-                }).catch(function () { results[m] = null; next(); });
-            }
-            return next();
+                });
+                sendJson(res, 200, results);
+            }).catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
         // -------- deploy: schedule task type 1 on a list of FOG host ids --------

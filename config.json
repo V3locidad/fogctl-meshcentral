@@ -1,7 +1,7 @@
 {
   "name": "fogctl",
   "shortName": "fogctl",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "author": "V3locidad",
   "description": "Trigger FOG Project tasks (deploy, capture, snapin) on MeshCentral devices",
   "hasAdminPanel": true,
