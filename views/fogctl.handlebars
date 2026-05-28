@@ -150,9 +150,12 @@
       var n = nodes[nid];
       if (!n) continue;
       if (!isWindows(n)) continue;
+      // Some MeshCentral builds key `nodes` by short numeric ids and store the
+      // canonical "node//..." identifier in `_id`. runcommands needs the long form.
+      var fullId = n._id || nid;
       nList.push({
-        id: nid,
-        name: n.name || nid,
+        id: fullId,
+        name: n.name || fullId,
         meshid: n.meshid,
         online: !!(n.conn & 1),
         mac: getNodeMac(n)
