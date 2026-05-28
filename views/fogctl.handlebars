@@ -368,10 +368,15 @@
       var orig = ms[name];
       ms[name] = function (data) {
         try {
-          if (data && (data.action === 'msg' || data.action === 'runcommands' || data.action === 'console')) {
-            dbg('RX [' + name + ']', data);
-            tryHandleReply(data);
-          }
+          // Log EVERYTHING while we figure out the right reply format on this MC version.
+          // Truncate big payloads so the console stays usable.
+          var brief = data;
+          try {
+            var s = JSON.stringify(data);
+            if (s && s.length > 600) brief = s.slice(0, 600) + '…(+' + (s.length - 600) + ')';
+          } catch (_) {}
+          dbg('RX [' + name + ']', data && data.action, brief);
+          tryHandleReply(data);
         } catch (e) { dbg('hook error', e); }
         return orig.apply(ms, arguments);
       };
