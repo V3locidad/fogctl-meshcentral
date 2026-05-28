@@ -74,6 +74,9 @@ module.exports.fogctl = function (parent) {
                     try { data = text ? JSON.parse(text) : {}; } catch (e) { data = { raw: text }; }
                     if (res.statusCode >= 200 && res.statusCode < 300) {
                         resolve({ status: res.statusCode, data: data });
+                    } else if (res.statusCode >= 300 && res.statusCode < 400) {
+                        // Redirects usually mean wrong URL or unauthenticated (FOG sends you to its login page).
+                        reject(new Error('FOG ' + res.statusCode + ' redirect to: ' + (res.headers.location || '(no Location header)')));
                     } else {
                         reject(new Error('FOG ' + res.statusCode + ': ' + (data && data.error ? data.error : text.slice(0, 200))));
                     }
@@ -133,8 +136,9 @@ module.exports.fogctl = function (parent) {
         if (action === 'ping') {
             var cfg = loadConfig();
             if (!cfg) return sendJson(res, 200, { ok: false, error: 'fog-config.json missing or invalid' });
-            return fogCall('GET', '/fog/system/info')
-                .then(function (r) { sendJson(res, 200, { ok: true, fogUrl: cfg.fogUrl, info: r.data }); })
+            // /fog/host is the canonical "is the API alive" endpoint — exists in every FOG 1.5.x.
+            return fogCall('GET', '/fog/host?count=1')
+                .then(function (r) { sendJson(res, 200, { ok: true, fogUrl: cfg.fogUrl, info: { hosts: (r.data && r.data.count) || (Array.isArray(r.data && r.data.hosts) ? r.data.hosts.length : 0) } }); })
                 .catch(function (e) { sendJson(res, 200, { ok: false, error: e.message }); });
         }
 
