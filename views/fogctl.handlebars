@@ -319,38 +319,61 @@
   }
 
   var runCallbacks = {};  // sentinel -> { resolve, timer, buffer, nodeId }
+  var DEBUG = true;       // Set false later. When true, log to console.log every message we intercept.
+  function dbg() {
+    if (!DEBUG) return;
+    try { (P.console || console).log.apply(P.console || console, ['[FOGCTL]'].concat([].slice.call(arguments))); } catch (e) {}
+  }
+
+  function tryHandleReply(data) {
+    if (!data) return false;
+    // Accept many shapes — MeshCentral has evolved this over versions.
+    var value = data.value;
+    if (typeof value !== 'string') value = data.data;
+    if (typeof value !== 'string') value = data.result;
+    if (typeof value !== 'string') value = data.output;
+    if (typeof value !== 'string' && data.responses && data.responses[0]) value = data.responses[0].result || data.responses[0].value;
+    if (typeof value !== 'string') return false;
+    var nid = data.nodeid || data.nodeId || data.node || (data.responses && data.responses[0] && (data.responses[0].nodeid || data.responses[0].nodeId));
+    var matched = false;
+    Object.keys(runCallbacks).forEach(function (sent) {
+      var cb = runCallbacks[sent];
+      if (nid && cb.nodeId && nid !== cb.nodeId) return;
+      if (value.indexOf(sent) === -1) {
+        cb.buffer += value;
+        return;
+      }
+      cb.buffer += value;
+      var m = new RegExp('FOGCTL:' + sent + ':([^\\r\\n]*)').exec(cb.buffer);
+      var payload = m ? m[1].trim() : '';
+      dbg('matched sentinel', sent, 'payload:', payload, 'node:', nid);
+      clearTimeout(cb.timer);
+      delete runCallbacks[sent];
+      cb.resolve(payload);
+      matched = true;
+    });
+    return matched;
+  }
+
   function ensureRunHook() {
     var ms = meshserver();
     if (!ms || ms.__fogctlHooked) return ms;
-    // MeshCentral routes incoming messages via meshserver.onMessage. We monkey-patch
-    // to peek at runcommands replies without breaking the original handler.
-    var orig = ms.onMessage;
-    ms.onMessage = function (data) {
-      try {
-        if (data && (data.action === 'msg' || data.action === 'runcommands')) {
-          var value = data.value || data.data || data.result || '';
-          var nid = data.nodeid || data.nodeId;
-          // Match any open callback whose sentinel appears in the chunk.
-          Object.keys(runCallbacks).forEach(function (sent) {
-            var cb = runCallbacks[sent];
-            if (nid && cb.nodeId && nid !== cb.nodeId) return;
-            if (typeof value !== 'string') return;
-            if (value.indexOf(sent) === -1) {
-              cb.buffer += value;
-              return;
-            }
-            cb.buffer += value;
-            // Extract the line containing the sentinel: "FOGCTL:<sentinel>:<payload>"
-            var m = new RegExp('FOGCTL:' + sent + ':([^\\r\\n]*)').exec(cb.buffer);
-            var payload = m ? m[1].trim() : '';
-            clearTimeout(cb.timer);
-            delete runCallbacks[sent];
-            cb.resolve(payload);
-          });
-        }
-      } catch (e) {}
-      if (orig) return orig.call(ms, data);
-    };
+    // MeshCentral exposes both onMessage and the internal xxOnMessage. We hook
+    // whichever exists, log everything in DEBUG, and try to match replies.
+    ['onMessage', 'xxOnMessage'].forEach(function (name) {
+      if (typeof ms[name] !== 'function') return;
+      var orig = ms[name];
+      ms[name] = function (data) {
+        try {
+          if (data && (data.action === 'msg' || data.action === 'runcommands' || data.action === 'console')) {
+            dbg('RX [' + name + ']', data);
+            tryHandleReply(data);
+          }
+        } catch (e) { dbg('hook error', e); }
+        return orig.apply(ms, arguments);
+      };
+      dbg('hooked', name);
+    });
     ms.__fogctlHooked = true;
     return ms;
   }
@@ -358,22 +381,25 @@
   function runPowerShell(nodeId, script, timeoutMs) {
     return new Promise(function (resolve) {
       var ms = ensureRunHook();
-      if (!ms || typeof ms.send !== 'function') return resolve(null);
+      if (!ms || typeof ms.send !== 'function') { dbg('no meshserver'); return resolve(null); }
       var sent = 'S' + Math.random().toString(36).slice(2, 10);
       var wrapped = script + '\nWrite-Host ("FOGCTL:' + sent + ':" + $FOGCTL_RESULT)\n';
       var timer = setTimeout(function () {
+        dbg('timeout sentinel', sent, 'node', nodeId, 'buffer:', (runCallbacks[sent] && runCallbacks[sent].buffer) || '');
         delete runCallbacks[sent];
         resolve(null);
       }, timeoutMs || 25000);
       runCallbacks[sent] = { resolve: resolve, timer: timer, buffer: '', nodeId: nodeId };
-      ms.send({
+      var msg = {
         action: 'runcommands',
         nodeids: [nodeId],
         type: 2,        // 2 = PowerShell
         cmds: wrapped,
         runAsUser: 0,   // 0 = SYSTEM
         reply: true
-      });
+      };
+      dbg('TX runcommands', { sentinel: sent, nodeId: nodeId, type: msg.type, runAsUser: msg.runAsUser });
+      ms.send(msg);
     });
   }
 
