@@ -50,6 +50,8 @@
     Snapin: <select id="snapinSel"><option>loading…</option></select>
   </span>
   <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
+  <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
+  <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
@@ -395,8 +397,10 @@
         alert('None of the selected computers are known to FOG.');
         return;
       }
+      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ')) : '';
       var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
-              + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '');
+              + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '')
+              + when;
       if (!confirm(msg + '. Continue?')) return;
 
       $('progress').textContent = '0/' + hostIds.length;
@@ -414,6 +418,18 @@
         var sid = $('snapinSel').value;
         if (!sid) { alert('Pick a snapin first.'); return; }
         extra.snapinId = sid;
+      }
+
+      // Scheduled run? The datetime-local field gives us "YYYY-MM-DDTHH:MM" in
+      // the user's local timezone — FOG schedules in server-local time so this
+      // assumes the MeshCentral admin and the FOG server share a clock.
+      if ($('scheduleOn').checked) {
+        var ts = $('scheduleAt').value;
+        if (!ts) { alert('Pick a date/time.'); return; }
+        var when = new Date(ts);
+        if (isNaN(when.getTime())) { alert('Invalid date/time.'); return; }
+        if (when.getTime() < Date.now() + 30000) { alert('Pick a date in the future.'); return; }
+        extra.scheduledFor = ts.replace('T', ' ');
       }
 
       extra.hostIds = hostIds.join(',');
@@ -454,6 +470,24 @@
     };
     // Trigger once so the initial Deploy selection shows its image dropdown.
     $('actionSel').onchange();
+
+    // Schedule wiring: when the checkbox is on, enable the datetime input and
+    // relabel the Run button. Default datetime is now + 1h, rounded to the next
+    // 15 minutes — typical for "schedule for tonight" workflows.
+    function updateScheduleUI() {
+      var on = $('scheduleOn').checked;
+      $('scheduleAt').disabled = !on;
+      $('scheduleAt').style.opacity = on ? '1' : '0.5';
+      $('runBtn').textContent = on ? 'Schedule on selected' : 'Run on selected';
+      if (on && !$('scheduleAt').value) {
+        var d = new Date(Date.now() + 3600 * 1000);
+        d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0);
+        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+        $('scheduleAt').value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                              + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      }
+    }
+    $('scheduleOn').onchange = updateScheduleUI;
 
     // Ping the FOG server through the plugin endpoint to surface config issues early.
     api('ping').then(function (r) {

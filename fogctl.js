@@ -214,24 +214,44 @@ module.exports.fogctl = function (parent) {
             }).catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- deploy: schedule task type 1 on a list of FOG host ids --------
+        // -------- deploy: task type 1 on a list of FOG host ids --------
         // -------- capture: same but task type 2 --------
         // Optional `imageId` overrides the host's assigned image (deploy only).
+        // Optional `scheduledFor` (YYYY-MM-DD HH:MM, FOG server local time) turns
+        // the immediate task into a single-shot scheduled task via /fog/scheduledtask.
         if (action === 'deploy' || action === 'capture') {
             var taskType = (action === 'deploy') ? 1 : 2;
             var ids = (req.query.hostIds || '').split(',').filter(Boolean);
             if (!ids.length) return sendJson(res, 400, { error: 'no host ids' });
             var overrideImg = (action === 'deploy' && req.query.imageId) ? req.query.imageId : null;
+            var scheduledFor = req.query.scheduledFor || null;
             var out = {};
             var qq = ids.slice();
             function step() {
                 if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
                 var id = qq.shift();
-                // FOG accepts an imageID override in the task body — the host's default image
-                // is left untouched.
-                var body = { taskTypeID: taskType };
-                if (overrideImg) body.imageID = overrideImg;
-                fogCall('POST', '/fog/host/' + encodeURIComponent(id) + '/task', body)
+                var endpoint, body;
+                if (scheduledFor) {
+                    // FOG 1.5.x scheduled tasks: POST /fog/scheduledtask/create
+                    // hostID is required, scheduleType=S means single (one-shot).
+                    // scheduleTimeStamp is a Unix timestamp.
+                    var ts = Math.floor(Date.parse(scheduledFor.replace(' ', 'T')) / 1000);
+                    endpoint = '/fog/scheduledtask/create';
+                    body = {
+                        name: 'fogctl ' + action + ' ' + scheduledFor,
+                        hostID: parseInt(id, 10),
+                        taskTypeID: taskType,
+                        scheduleType: 'S',
+                        scheduleTimeStamp: ts,
+                        isActive: 1
+                    };
+                    if (overrideImg) body.imageID = overrideImg;
+                } else {
+                    endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
+                    body = { taskTypeID: taskType };
+                    if (overrideImg) body.imageID = overrideImg;
+                }
+                fogCall('POST', endpoint, body)
                     .then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                     .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
@@ -262,18 +282,30 @@ module.exports.fogctl = function (parent) {
 
         // -------- snapinRun: trigger snapin task (type 12) on a list of hosts.
         // FOG associates the snapin to the host first if needed.
+        // Optional `scheduledFor` turns it into a single-shot scheduled task.
         if (action === 'snapinRun') {
             var snapinId = req.query.snapinId;
             var ids2 = (req.query.hostIds || '').split(',').filter(Boolean);
+            var snapinSchedFor = req.query.scheduledFor || null;
             if (!snapinId) return sendJson(res, 400, { error: 'snapinId required' });
             if (!ids2.length) return sendJson(res, 400, { error: 'no host ids' });
             var out2 = {};
             var qq2 = ids2.slice();
             function assocAndRun(hostId) {
-                // Try to associate first (idempotent — FOG returns an error if already linked, which we ignore).
                 return fogCall('POST', '/fog/snapinassociation/create', { snapinID: snapinId, hostID: hostId })
                     .catch(function () { return null; })
                     .then(function () {
+                        if (snapinSchedFor) {
+                            var ts = Math.floor(Date.parse(snapinSchedFor.replace(' ', 'T')) / 1000);
+                            return fogCall('POST', '/fog/scheduledtask/create', {
+                                name: 'fogctl snapin ' + snapinSchedFor,
+                                hostID: parseInt(hostId, 10),
+                                taskTypeID: 12,
+                                scheduleType: 'S',
+                                scheduleTimeStamp: ts,
+                                isActive: 1
+                            });
+                        }
                         return fogCall('POST', '/fog/host/' + encodeURIComponent(hostId) + '/task', { taskTypeID: 12 });
                     });
             }
