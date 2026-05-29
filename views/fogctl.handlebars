@@ -4,16 +4,19 @@
 <meta charset="utf-8">
 <title>FOG Control</title>
 <style>
-  html, body { height: 100%; }
-  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; margin: 0; padding: 10px; color: #222; box-sizing: border-box; display: flex; flex-direction: column; }
-  h2 { margin: 0 0 10px 0; font-size: 16px; flex: 0 0 auto; }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; flex: 0 0 auto; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; padding: 10px; color: #222; box-sizing: border-box; }
+  h2 { margin: 0 0 10px 0; font-size: 16px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; }
   .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
   button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
   button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cols { display: flex; gap: 10px; flex: 1 1 auto; min-height: 200px; overflow: hidden; }
-  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  /* Columns get an explicit pixel height computed at runtime from window.innerHeight.
+     We can't rely on flex/100% here: MeshCentral's plugin iframe is sized to fit content,
+     so percentages collapse to 0 and the lists just keep growing past the viewport. */
+  .cols { display: flex; gap: 10px; }
+  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; height: 600px; }
   .col h3 { margin: 0; padding: 8px; background: #eee; border-bottom: 1px solid #ddd; font-size: 13px; flex: 0 0 auto; }
   .col .search { flex: 0 0 auto; }
   .col > div[id$="List"] { flex: 1 1 auto; overflow: auto; min-height: 0; }
@@ -466,16 +469,39 @@
     });
   }
 
+  // Resize columns to fill whatever vertical space is available in the *parent*
+  // window. MeshCentral's plugin iframe is auto-sized to content, so percent
+  // heights and flex:1 don't work — we have to measure the host page and push
+  // the column to a concrete pixel height.
+  function resizeCols() {
+    var h;
+    try { h = (W.parent && W.parent.innerHeight) ? W.parent.innerHeight : W.innerHeight; }
+    catch (e) { h = W.innerHeight; }
+    var cols = document.querySelector('.cols');
+    if (!cols) return;
+    var top = cols.getBoundingClientRect().top;
+    var logsEl = $('logs');
+    var logsReserve = (logsEl.style.display === 'none') ? 20 : (logsEl.offsetHeight + 30);
+    var avail = h - top - logsReserve - 40;
+    if (avail < 240) avail = 240;
+    var list = document.querySelectorAll('.col');
+    for (var i = 0; i < list.length; i++) list[i].style.height = avail + 'px';
+  }
+
   function init() {
     loadFromMesh();
     renderGroups();
     renderNodes();
+    resizeCols();
+    window.addEventListener('resize', resizeCols);
+    try { W.parent.addEventListener('resize', resizeCols); } catch (e) {}
+    setInterval(resizeCols, 1500);
 
     $('groupSearch').oninput = renderGroups;
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
     $('runBtn').onclick = runAction;
-    $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); };
+    $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
     $('actionSel').onchange = function () {
       var a = $('actionSel').value;
       $('snapinWrap').style.display = (a === 'snapin') ? '' : 'none';
