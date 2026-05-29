@@ -16,7 +16,7 @@
      We can't rely on flex/100% here: MeshCentral's plugin iframe is sized to fit content,
      so percentages collapse to 0 and the lists just keep growing past the viewport. */
   .cols { display: flex; gap: 10px; }
-  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; height: 600px; }
+  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; height: 500px; max-height: calc(100vh - 200px); }
   .col h3 { margin: 0; padding: 8px; background: #eee; border-bottom: 1px solid #ddd; font-size: 13px; flex: 0 0 auto; }
   .col .search { flex: 0 0 auto; }
   .col > div[id$="List"] { flex: 1 1 auto; overflow: auto; min-height: 0; }
@@ -474,16 +474,16 @@
   // heights and flex:1 don't work — we have to measure the host page and push
   // the column to a concrete pixel height.
   function resizeCols() {
-    var h;
-    try { h = (W.parent && W.parent.innerHeight) ? W.parent.innerHeight : W.innerHeight; }
-    catch (e) { h = W.innerHeight; }
+    // Iframe viewport (self.innerHeight) is what actually bounds us — the parent
+    // page can be larger but the plugin only gets the slice MeshCentral allocates.
+    var h = W.innerHeight || 600;
     var cols = document.querySelector('.cols');
     if (!cols) return;
     var top = cols.getBoundingClientRect().top;
     var logsEl = $('logs');
-    var logsReserve = (logsEl.style.display === 'none') ? 20 : (logsEl.offsetHeight + 30);
-    var avail = h - top - logsReserve - 40;
-    if (avail < 240) avail = 240;
+    var logsReserve = (logsEl.style.display === 'none') ? 0 : (logsEl.offsetHeight + 20);
+    var avail = h - top - logsReserve - 20;
+    if (avail < 200) avail = 200;
     var list = document.querySelectorAll('.col');
     for (var i = 0; i < list.length; i++) list[i].style.height = avail + 'px';
   }
