@@ -37,6 +37,17 @@
   #logs { margin-top: 10px; background: #111; color: #ddd; font-family: Menlo, Consolas, monospace; font-size: 12px; padding: 8px; border-radius: 4px; height: 220px; min-height: 120px; overflow: auto; white-space: pre-wrap; display: none; resize: vertical; flex: 0 0 auto; }
   #progress { font-weight: 600; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
+  #tasksPanel { margin-top: 10px; border: 1px solid #ddd; border-radius: 4px; display: none; }
+  #tasksPanel .tphead { padding: 8px; background: #eee; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px; }
+  #tasksPanel .tphead h3 { margin: 0; font-size: 13px; flex: 0 0 auto; }
+  #tasksPanel .tphead .spacer { flex: 1; }
+  #tasksTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #tasksTable th, #tasksTable td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+  #tasksTable th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
+  #tasksTable .progress-cell { width: 120px; }
+  #tasksTable .progress-bar { background: #eee; border-radius: 3px; overflow: hidden; height: 10px; position: relative; }
+  #tasksTable .progress-fill { background: #2c7be5; height: 100%; transition: width 0.3s; }
+  #tasksTableWrap { max-height: 320px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -63,8 +74,33 @@
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
+    <button id="tasksBtn">Active tasks</button>
     <button id="logsBtn">Logs</button>
   </span>
+</div>
+
+<div id="tasksPanel">
+  <div class="tphead">
+    <h3>Active FOG tasks <span id="taskCount" class="pill">0</span></h3>
+    <span class="spacer"></span>
+    <button id="refreshTasksBtn">Refresh</button>
+    <button id="cancelTasksBtn" class="primary">Cancel selected</button>
+  </div>
+  <div id="tasksTableWrap">
+    <table id="tasksTable">
+      <thead>
+        <tr>
+          <th style="width:30px"><input type="checkbox" id="taskCheckAll"></th>
+          <th>Host</th>
+          <th>Type</th>
+          <th>State</th>
+          <th class="progress-cell">Progress</th>
+          <th>Task ID</th>
+        </tr>
+      </thead>
+      <tbody id="tasksBody"></tbody>
+    </table>
+  </div>
 </div>
 
 <div class="cols">
@@ -95,8 +131,9 @@
     fogMap: {},         // nodeid -> { hostId, name, image } or null
     snapins: [],
     images: [],
-    taskMap: {}  // hostID -> { type, label, percent, state }
-
+    taskMap: {},  // hostID -> { type, label, percent, state }
+    tasksList: [],     // flat list of active tasks for the Active tasks panel
+    checkedTasks: {}   // taskId -> true
   };
 
   function $(id) { return document.getElementById(id); }
@@ -329,10 +366,12 @@
   }
 
   // Poll FOG for active tasks. We build a map: nodeId -> task info, by reverse-
-  // mapping FOG host id -> nodeId via the fogMap we already built.
+  // mapping FOG host id -> nodeId via the fogMap we already built. We also store
+  // the raw flat list so the Active tasks panel can render it independently.
   function pollActiveTasks() {
     api('activeTasks').then(function (r) {
       var byFogHost = (r && r.byHost) || {};
+      var list = (r && r.tasks) || [];
       var fogToNode = {};
       Object.keys(state.fogMap).forEach(function (nid) {
         var f = state.fogMap[nid];
@@ -343,12 +382,85 @@
         var nid = fogToNode[hid];
         if (nid) newMap[nid] = byFogHost[hid];
       });
-      // Only re-render if anything actually changed.
-      if (JSON.stringify(newMap) !== JSON.stringify(state.taskMap)) {
-        state.taskMap = newMap;
-        renderNodes();
-      }
+      var nodesChanged = (JSON.stringify(newMap) !== JSON.stringify(state.taskMap));
+      var listChanged = (JSON.stringify(list) !== JSON.stringify(state.tasksList));
+      if (nodesChanged) { state.taskMap = newMap; renderNodes(); }
+      if (listChanged) { state.tasksList = list; renderTasks(); }
     }).catch(function () { /* silent */ });
+  }
+
+  function renderTasks() {
+    $('taskCount').textContent = state.tasksList.length;
+    // Prune checked entries that are no longer running.
+    var live = {};
+    state.tasksList.forEach(function (t) { live[t.taskId] = true; });
+    Object.keys(state.checkedTasks).forEach(function (tid) { if (!live[tid]) delete state.checkedTasks[tid]; });
+
+    var rows = state.tasksList.map(function (t) {
+      var ck = state.checkedTasks[t.taskId] ? ' checked' : '';
+      var pct = (t.percent != null && t.percent !== '') ? Number(t.percent) : null;
+      var pctText = (pct != null && !isNaN(pct)) ? (pct + '%') : '—';
+      var pctBar = (pct != null && !isNaN(pct))
+        ? '<div class="progress-bar"><div class="progress-fill" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div>'
+        : '<span style="color:#888">' + escapeHtml(pctText) + '</span>';
+      return '<tr>'
+        + '<td><input type="checkbox" data-tid="' + escapeHtml(t.taskId) + '"' + ck + '></td>'
+        + '<td>' + escapeHtml(t.hostName || ('host #' + (t.hostId || '?'))) + '</td>'
+        + '<td>' + escapeHtml(t.label) + '</td>'
+        + '<td>' + escapeHtml(t.stateName || ('state ' + t.state)) + '</td>'
+        + '<td class="progress-cell">' + pctBar + (pct != null ? ' <small>' + pctText + '</small>' : '') + '</td>'
+        + '<td>#' + escapeHtml(t.taskId) + '</td>'
+        + '</tr>';
+    }).join('');
+    $('tasksBody').innerHTML = rows || '<tr><td colspan="6" style="text-align:center;color:#888;padding:10px">No active tasks</td></tr>';
+
+    [].slice.call($('tasksBody').querySelectorAll('input[type=checkbox][data-tid]')).forEach(function (cb) {
+      cb.onclick = function () {
+        var tid = cb.getAttribute('data-tid');
+        if (cb.checked) state.checkedTasks[tid] = true;
+        else delete state.checkedTasks[tid];
+      };
+    });
+    var all = $('taskCheckAll');
+    if (all) {
+      all.checked = state.tasksList.length > 0 && state.tasksList.every(function (t) { return state.checkedTasks[t.taskId]; });
+      all.onclick = function () {
+        var ck = all.checked;
+        state.tasksList.forEach(function (t) {
+          if (ck) state.checkedTasks[t.taskId] = true;
+          else delete state.checkedTasks[t.taskId];
+        });
+        renderTasks();
+      };
+    }
+  }
+
+  function showTasks(v) {
+    $('tasksPanel').style.display = v ? 'block' : 'none';
+    resizeCols();
+    if (v) pollActiveTasks();
+  }
+
+  function cancelSelectedTasks() {
+    var ids = Object.keys(state.checkedTasks);
+    if (!ids.length) { alert('No task selected.'); return; }
+    if (!confirm('Cancel ' + ids.length + ' task(s)?')) return;
+    showLogs(true);
+    log('Cancelling ' + ids.length + ' task(s)…');
+    api('cancel', { taskIds: ids.join(',') }).then(function (r) {
+      if (r && r.results) {
+        var ok = 0, ko = 0;
+        Object.keys(r.results).forEach(function (tid) {
+          if (r.results[tid].ok) ok++;
+          else { ko++; log('  ' + tid + ': ' + r.results[tid].error); }
+        });
+        log('Cancel done. ' + ok + ' ok, ' + ko + ' failed.');
+      } else if (r && r.error) {
+        log('Cancel error: ' + r.error);
+      }
+      state.checkedTasks = {};
+      pollActiveTasks();
+    }).catch(function (e) { log('Cancel request failed: ' + e.message); });
   }
 
   function loadImages() {
@@ -482,7 +594,9 @@
     var top = cols.getBoundingClientRect().top;
     var logsEl = $('logs');
     var logsReserve = (logsEl.style.display === 'none') ? 0 : (logsEl.offsetHeight + 20);
-    var avail = h - top - logsReserve - 20;
+    var tasksEl = $('tasksPanel');
+    var tasksReserve = (tasksEl && tasksEl.style.display !== 'none') ? (tasksEl.offsetHeight + 20) : 0;
+    var avail = h - top - logsReserve - tasksReserve - 20;
     if (avail < 200) avail = 200;
     var list = document.querySelectorAll('.col');
     for (var i = 0; i < list.length; i++) list[i].style.height = avail + 'px';
@@ -502,6 +616,9 @@
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
+    $('tasksBtn').onclick = function () { showTasks($('tasksPanel').style.display === 'none'); };
+    $('refreshTasksBtn').onclick = function () { pollActiveTasks(); };
+    $('cancelTasksBtn').onclick = cancelSelectedTasks;
     $('actionSel').onchange = function () {
       var a = $('actionSel').value;
       $('snapinWrap').style.display = (a === 'snapin') ? '' : 'none';

@@ -336,39 +336,61 @@ module.exports.fogctl = function (parent) {
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- activeTasks: simplified per-host status used by the UI poller --------
+        // -------- activeTasks: per-host map + flat list of running tasks --------
         if (action === 'activeTasks') {
             return fogCall('GET', '/fog/task/active')
                 .then(function (r) {
                     var arr = (r.data && r.data.tasks) || r.data || [];
                     var byHost = {};
+                    var list = [];
                     // FOG task type names (subset): 1=Deploy, 2=Capture, 8=Multicast, 12=Snapin
                     var typeNames = { '1': 'Deploy', '2': 'Capture', '8': 'Multicast', '12': 'Snapin' };
                     arr.forEach(function (t) {
                         var hid = t.hostID || (t.host && t.host.id);
-                        if (!hid) return;
                         var typeId = String(t.typeID || (t.type && t.type.id) || '');
-                        byHost[hid] = {
+                        var hostName = (t.host && t.host.name) || t.hostname || '';
+                        var entry = {
                             taskId: t.id,
+                            hostId: hid,
+                            hostName: hostName,
                             type: typeId,
                             label: typeNames[typeId] || ('Task ' + typeId),
                             state: t.stateID || (t.state && t.state.id),
-                            stateName: t.stateName || (t.state && t.state.name),
-                            percent: t.percent != null ? t.percent : null
+                            stateName: t.stateName || (t.state && t.state.name) || '',
+                            percent: t.percent != null ? t.percent : null,
+                            createdTime: t.createdTime || (t.created && t.created.time) || ''
                         };
+                        if (hid) byHost[hid] = entry;
+                        list.push(entry);
                     });
-                    sendJson(res, 200, { byHost: byHost, count: arr.length });
+                    sendJson(res, 200, { byHost: byHost, tasks: list, count: arr.length });
                 })
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- cancel: cancel a task --------
+        // -------- cancel: cancel one or several tasks --------
+        // FOG REST has fluctuated on which verb/endpoint cancels a task across
+        // 1.5.x point releases. We try DELETE /fog/task/{id} first, fall back to
+        // POST /fog/task/cancel { id }, then DELETE /fog/task/{id}/cancel.
         if (action === 'cancel') {
-            var tid = req.query.taskId;
-            if (!tid) return sendJson(res, 400, { error: 'taskId required' });
-            return fogCall('DELETE', '/fog/task/' + encodeURIComponent(tid) + '/cancel', null)
-                .then(function (r) { sendJson(res, 200, r.data); })
-                .catch(function (e) { sendJson(res, 500, { error: e.message }); });
+            var tidsRaw = req.query.taskIds || req.query.taskId || '';
+            var tids = String(tidsRaw).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+            if (!tids.length) return sendJson(res, 400, { error: 'taskId(s) required' });
+            function cancelOne(tid) {
+                return fogCall('DELETE', '/fog/task/' + encodeURIComponent(tid), null)
+                    .catch(function () { return fogCall('POST', '/fog/task/cancel', { id: parseInt(tid, 10) }); })
+                    .catch(function () { return fogCall('DELETE', '/fog/task/' + encodeURIComponent(tid) + '/cancel', null); });
+            }
+            var resCancel = {};
+            var qc = tids.slice();
+            function stepC() {
+                if (!qc.length) return sendJson(res, 200, { ok: true, results: resCancel });
+                var tid = qc.shift();
+                cancelOne(tid)
+                    .then(function (r) { resCancel[tid] = { ok: true, data: r && r.data }; stepC(); })
+                    .catch(function (e) { resCancel[tid] = { ok: false, error: e.message }; stepC(); });
+            }
+            return stepC();
         }
 
         // -------- default: render the plugin UI --------
