@@ -444,7 +444,6 @@
     var ids = Object.keys(state.checkedTasks);
     if (!ids.length) { alert('No task selected.'); return; }
     if (!confirm('Cancel ' + ids.length + ' task(s)?')) return;
-    showLogs(true);
     log('Cancelling ' + ids.length + ' task(s)…');
     api('cancel', { taskIds: ids.join(',') }).then(function (r) {
       if (r && r.results) {
