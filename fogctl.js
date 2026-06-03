@@ -229,9 +229,7 @@ module.exports.fogctl = function (parent) {
             var wantShutdown = req.query.shutdown === '1';
             var out = {};
             var qq = ids.slice();
-            function step() {
-                if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
-                var id = qq.shift();
+            function postTask(id) {
                 var endpoint, body;
                 if (scheduledFor) {
                     var ts = Math.floor(Date.parse(scheduledFor.replace(' ', 'T')) / 1000);
@@ -240,20 +238,32 @@ module.exports.fogctl = function (parent) {
                         name: 'fogctl ' + action + ' ' + scheduledFor,
                         hostID: parseInt(id, 10),
                         taskTypeID: taskType,
-                        type: 'S',           // schedule kind: S = single (one-shot)
-                        scheduleTime: ts,    // Unix timestamp — the real field name (verified against GET /fog/scheduledtask)
+                        type: 'S',
+                        scheduleTime: ts,
                         isActive: 1
                     };
                 } else {
                     endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
                     body = { taskTypeID: taskType };
                 }
-                if (overrideImg) body.imageID = overrideImg;
                 if (wantWol) body.wol = true;
                 if (wantShutdown) body.shutdown = true;
-                fogCall('POST', endpoint, body)
-                    .then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
-                    .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
+                return fogCall('POST', endpoint, body);
+            }
+            function step() {
+                if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
+                var id = qq.shift();
+                // L'API FOG ignore imageID dans le body POST /host/:id/task : la
+                // task se base sur host.imageID assigné. Pour overrider, on
+                // assigne l'image au host via PUT, puis on poste la task. Sans
+                // ce PUT, si le host n'a pas d'image par défaut, FOG refuse la
+                // task avec « no image assigned ».
+                var p = overrideImg
+                    ? fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
+                        .then(function () { return postTask(id); })
+                    : postTask(id);
+                p.then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
+                 .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
             return step();
         }
