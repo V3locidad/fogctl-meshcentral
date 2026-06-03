@@ -73,6 +73,10 @@
   <button id="runBtn" class="primary">Run on selected</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
+    <select id="tplSel" title="Charger un template"><option value="">— Templates —</option></select>
+    <button id="tplSaveBtn" title="Sauver les options courantes comme template">💾</button>
+    <button id="tplDelBtn" title="Supprimer le template sélectionné">🗑️</button>
+    <button id="historyBtn" title="Historique des déploiements">🕘 Historique</button>
     <button id="logsBtn">Logs</button>
   </span>
 </div>
@@ -493,6 +497,104 @@
     }).catch(function (e) { log('snapinList failed: ' + e.message); });
   }
 
+  function snapshotOptions() {
+    return {
+      action:     $('actionSel').value,
+      imageId:    $('imageSel').value || '',
+      snapinId:   $('snapinSel').value || '',
+      wol:        $('optWol').checked,
+      shutdown:   $('optShutdown').checked,
+      joinAd:     $('optJoinAd').checked,
+      forceName:  $('optForceName').checked,
+    };
+  }
+  function applyOptions(o) {
+    if (!o) return;
+    if (o.action) $('actionSel').value = o.action;
+    $('actionSel').onchange();
+    if (o.imageId !== undefined) $('imageSel').value = o.imageId;
+    if (o.snapinId !== undefined) $('snapinSel').value = o.snapinId;
+    $('optWol').checked       = !!o.wol;
+    $('optShutdown').checked  = !!o.shutdown;
+    $('optJoinAd').checked    = !!o.joinAd;
+    $('optForceName').checked = !!o.forceName;
+  }
+  function loadTemplates() {
+    api('templates').then(function (r) {
+      var sel = $('tplSel');
+      while (sel.options.length > 1) sel.remove(1);
+      (r.templates || []).forEach(function (t) {
+        var o = document.createElement('option');
+        o.value = t.id; o.textContent = t.name;
+        sel.appendChild(o);
+      });
+    });
+  }
+  function saveCurrentAsTemplate() {
+    var name = prompt('Nom du template :');
+    if (!name) return;
+    var tpl = snapshotOptions();
+    tpl.name = name;
+    api('saveTemplate', { payload: encodeURIComponent(JSON.stringify(tpl)) }).then(function (r) {
+      if (r.error) return alert('Erreur : ' + r.error);
+      loadTemplates();
+    });
+  }
+  function deleteSelectedTemplate() {
+    var id = $('tplSel').value;
+    if (!id) return alert('Aucun template sélectionné.');
+    if (!confirm('Supprimer ce template ?')) return;
+    api('deleteTemplate', { id: id }).then(function (r) {
+      if (r.error) return alert('Erreur : ' + r.error);
+      loadTemplates();
+    });
+  }
+  function applySelectedTemplate() {
+    var id = $('tplSel').value;
+    if (!id) return;
+    api('templates').then(function (r) {
+      var t = (r.templates || []).find(function (x) { return x.id === id; });
+      if (t) applyOptions(t);
+    });
+  }
+
+  function openHistory() {
+    api('history').then(function (r) {
+      var entries = r.entries || [];
+      var html = '<div style="background:#1e1e1e;color:#eee;font-family:monospace;font-size:12px;padding:10px;max-height:60vh;overflow:auto;border-radius:4px">';
+      if (!entries.length) html += '(historique vide)';
+      else {
+        html += '<table style="width:100%;border-collapse:collapse;color:#eee"><thead><tr style="text-align:left">'
+              + '<th style="padding:4px;border-bottom:1px solid #555">Quand</th>'
+              + '<th style="padding:4px;border-bottom:1px solid #555">Action</th>'
+              + '<th style="padding:4px;border-bottom:1px solid #555">Hosts</th>'
+              + '<th style="padding:4px;border-bottom:1px solid #555">OK/KO</th>'
+              + '<th style="padding:4px;border-bottom:1px solid #555">Options</th>'
+              + '</tr></thead><tbody>';
+        entries.forEach(function (e) {
+          var opts = [];
+          if (e.scheduledFor) opts.push('sched=' + e.scheduledFor);
+          if (e.overrideImg) opts.push('img=' + e.overrideImg);
+          if (e.snapinId) opts.push('snapin=' + e.snapinId);
+          if (e.wol) opts.push('wol');
+          if (e.shutdown) opts.push('shutdown');
+          html += '<tr>'
+                + '<td style="padding:4px;border-bottom:1px solid #333;white-space:nowrap">' + new Date(e.ts).toLocaleString() + '</td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.kind || '?') + '</td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.hostIds || []).length + '</td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333"><span style="color:#3c3">' + (e.ok||0) + '</span> / <span style="color:#f44">' + (e.ko||0) + '</span></td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333">' + opts.join(' ') + '</td>'
+                + '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+      html += '</div>';
+      var win = window.open('', 'fogctl-history', 'width=900,height=600');
+      win.document.write('<title>fogctl — Historique</title><body style="font-family:sans-serif;background:#222;color:#eee">' + html + '</body>');
+      win.document.close();
+    });
+  }
+
   function runAction() {
     var action = $('actionSel').value;
     var ids = selectedNodeIds();
@@ -627,6 +729,11 @@
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
+    $('historyBtn').onclick = openHistory;
+    $('tplSaveBtn').onclick = saveCurrentAsTemplate;
+    $('tplDelBtn').onclick = deleteSelectedTemplate;
+    $('tplSel').onchange = applySelectedTemplate;
+    loadTemplates();
     $('refreshTasksBtn').onclick = function () { pollActiveTasks(); };
     $('cancelTasksBtn').onclick = cancelSelectedTasks;
     renderTasks();

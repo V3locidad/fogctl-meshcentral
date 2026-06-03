@@ -22,6 +22,23 @@ module.exports.fogctl = function (parent) {
     obj.exports = ['onDeviceRefreshEnd'];
 
     var configFile = path.join(__dirname, 'fog-config.json');
+    var templatesFile = path.join(__dirname, 'fogctl-templates.json');
+    var historyFile = path.join(__dirname, 'fogctl-history.json');
+    var HISTORY_MAX = 100;
+
+    function loadJson(p, fallback) {
+        try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return fallback; }
+    }
+    function saveJson(p, obj) {
+        try { fs.writeFileSync(p, JSON.stringify(obj, null, 2)); return true; } catch (e) { return false; }
+    }
+    function pushHistory(entry) {
+        var h = loadJson(historyFile, { entries: [] });
+        if (!Array.isArray(h.entries)) h.entries = [];
+        h.entries.unshift(entry);
+        if (h.entries.length > HISTORY_MAX) h.entries.length = HISTORY_MAX;
+        saveJson(historyFile, h);
+    }
 
     function loadConfig() {
         try {
@@ -260,7 +277,21 @@ module.exports.fogctl = function (parent) {
                 return fogCall('POST', endpoint, body);
             }
             function step() {
-                if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
+                if (!qq.length) {
+                    // Historise : action, hosts, ok/ko, options
+                    var ok = 0, ko = 0;
+                    Object.keys(out).forEach(function (h) { out[h].ok ? ok++ : ko++; });
+                    pushHistory({
+                        ts: Date.now(),
+                        kind: action,
+                        hostIds: ids,
+                        ok: ok, ko: ko,
+                        scheduledFor: scheduledFor || null,
+                        overrideImg: overrideImg || null,
+                        wol: wantWol, shutdown: wantShutdown,
+                    });
+                    return sendJson(res, 200, { ok: true, results: out });
+                }
                 var id = qq.shift();
                 // L'API FOG ignore imageID dans le body POST /host/:id/task : la
                 // task se base sur host.imageID. Politique d'override :
@@ -285,6 +316,41 @@ module.exports.fogctl = function (parent) {
         }
 
         // -------- imageList: list FOG images for the deploy override dropdown --------
+        // -------- templates: liste / save / delete des templates de deploy ----
+        if (action === 'templates') {
+            return sendJson(res, 200, loadJson(templatesFile, { templates: [] }));
+        }
+        if (action === 'saveTemplate') {
+            var tpl = (req.query && req.query.payload) ? JSON.parse(decodeURIComponent(req.query.payload)) : null;
+            if (!tpl || !tpl.name) return sendJson(res, 400, { error: 'name requis' });
+            var store = loadJson(templatesFile, { templates: [] });
+            if (!Array.isArray(store.templates)) store.templates = [];
+            // Upsert par id (généré depuis le nom si absent)
+            tpl.id = tpl.id || tpl.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            tpl.updated = Date.now();
+            var i = store.templates.findIndex(function (t) { return t.id === tpl.id; });
+            if (i >= 0) store.templates[i] = tpl; else store.templates.push(tpl);
+            if (!saveJson(templatesFile, store)) return sendJson(res, 500, { error: 'écriture impossible' });
+            return sendJson(res, 200, { ok: true, id: tpl.id });
+        }
+        if (action === 'deleteTemplate') {
+            var tid = String(req.query.id || '');
+            if (!tid) return sendJson(res, 400, { error: 'id requis' });
+            var store2 = loadJson(templatesFile, { templates: [] });
+            store2.templates = (store2.templates || []).filter(function (t) { return t.id !== tid; });
+            if (!saveJson(templatesFile, store2)) return sendJson(res, 500, { error: 'écriture impossible' });
+            return sendJson(res, 200, { ok: true });
+        }
+
+        // -------- history: derniers déploiements/captures/snapins ----
+        if (action === 'history') {
+            return sendJson(res, 200, loadJson(historyFile, { entries: [] }));
+        }
+        if (action === 'clearHistory') {
+            saveJson(historyFile, { entries: [] });
+            return sendJson(res, 200, { ok: true });
+        }
+
         // -------- setupAd: configure AD fields + active useAD/enforce sur hosts --
         // mode = 'join' → useAD=1, mode = 'forceNameChange' → enforce=1.
         // Si les champs AD du host sont vides, on les remplit depuis cfg.ad.
@@ -388,7 +454,20 @@ module.exports.fogctl = function (parent) {
                     });
             }
             function stepS() {
-                if (!qq2.length) return sendJson(res, 200, { ok: true, results: out2 });
+                if (!qq2.length) {
+                    var okS = 0, koS = 0;
+                    Object.keys(out2).forEach(function (h) { out2[h].ok ? okS++ : koS++; });
+                    pushHistory({
+                        ts: Date.now(),
+                        kind: 'snapin',
+                        hostIds: ids2,
+                        snapinId: snapinId,
+                        ok: okS, ko: koS,
+                        scheduledFor: snapinSchedFor || null,
+                        wol: snapinWol, shutdown: snapinShutdown,
+                    });
+                    return sendJson(res, 200, { ok: true, results: out2 });
+                }
                 var hid = qq2.shift();
                 assocAndRun(hid)
                     .then(function (r) { out2[hid] = { ok: true, data: r.data }; stepS(); })
