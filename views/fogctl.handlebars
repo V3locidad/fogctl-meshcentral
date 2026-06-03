@@ -68,9 +68,9 @@
   <label title="Shut down the host after the task completes"><input type="checkbox" id="optShutdown"> Shutdown after</label>
   <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
   <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
+  <label style="margin-left:8px" title="Set useAD=1 on each host before the task (fill AD fields from server config if empty)"><input type="checkbox" id="optJoinAd"> Join domain</label>
+  <label title="Set enforce=1 on each host before the task (force name change / AD join reboot)"><input type="checkbox" id="optForceName"> Force name change</label>
   <button id="runBtn" class="primary">Run on selected</button>
-  <button id="joinAdBtn" title="Set useAD=1 on the selected hosts (fill AD fields from server config if empty)">Join domain</button>
-  <button id="forceNameBtn" title="Set enforce=1 on the selected hosts (force name change / AD join reboot)">Force name change</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
     <button id="logsBtn">Logs</button>
@@ -493,37 +493,6 @@
     }).catch(function (e) { log('snapinList failed: ' + e.message); });
   }
 
-  function runAdAction(mode) {
-    var ids = selectedNodeIds();
-    if (!ids.length) { alert('No computer selected.'); return; }
-    var missing = ids.filter(function (id) { return state.fogMap[id] === undefined; });
-    var p = missing.length ? lookupSelected() : Promise.resolve();
-    p.then(function () {
-      var hostIds = [];
-      ids.forEach(function (id) {
-        var f = state.fogMap[id];
-        if (f && f.id) hostIds.push(f.id);
-      });
-      if (!hostIds.length) { alert('None of the selected computers are known to FOG.'); return; }
-      var label = (mode === 'join') ? 'Join domain' : 'Force name change';
-      if (!confirm(label + ' on ' + hostIds.length + ' host(s)?')) return;
-      log(label + ' on ' + hostIds.length + ' host(s)…');
-      api('setupAd', { mode: mode, hostIds: hostIds.join(',') }).then(function (r) {
-        if (r && r.results) {
-          var ok = 0, ko = 0, patched = 0;
-          Object.keys(r.results).forEach(function (hid) {
-            var res = r.results[hid];
-            if (res.ok) { ok++; if (res.patched && res.patched.length) patched += res.patched.length; }
-            else ko++;
-          });
-          log(label + ' done. ' + ok + ' ok, ' + ko + ' failed, ' + patched + ' field(s) patched.');
-        } else if (r && r.error) {
-          log('Error: ' + r.error);
-        }
-      }).catch(function (e) { log('Request failed: ' + e.message); });
-    });
-  }
-
   function runAction() {
     var action = $('actionSel').value;
     var ids = selectedNodeIds();
@@ -589,7 +558,33 @@
       if ($('optShutdown').checked) extra.shutdown = '1';
 
       extra.hostIds = hostIds.join(',');
-      api(apiAction, extra).then(function (r) {
+
+      // Pré-setup AD si demandé : on patche les hosts (useAD/enforce + champs
+      // AD si vides) avant de poster la task. Séquentiel pour avoir des logs
+      // clairs en cas d'échec partiel.
+      var adPre = Promise.resolve();
+      if ($('optJoinAd').checked) {
+        adPre = adPre.then(function () {
+          log('Join domain on ' + hostIds.length + ' host(s)…');
+          return api('setupAd', { mode: 'join', hostIds: hostIds.join(',') }).then(function (r) {
+            var ok = 0, ko = 0;
+            if (r && r.results) Object.keys(r.results).forEach(function (h) { r.results[h].ok ? ok++ : ko++; });
+            log('  join: ' + ok + ' ok, ' + ko + ' failed');
+          });
+        });
+      }
+      if ($('optForceName').checked) {
+        adPre = adPre.then(function () {
+          log('Force name change on ' + hostIds.length + ' host(s)…');
+          return api('setupAd', { mode: 'forceNameChange', hostIds: hostIds.join(',') }).then(function (r) {
+            var ok = 0, ko = 0;
+            if (r && r.results) Object.keys(r.results).forEach(function (h) { r.results[h].ok ? ok++ : ko++; });
+            log('  forceName: ' + ok + ' ok, ' + ko + ' failed');
+          });
+        });
+      }
+
+      adPre.then(function () { return api(apiAction, extra); }).then(function (r) {
         if (r && r.results) {
           var ok = 0, ko = 0, errs = [];
           Object.keys(r.results).forEach(function (hid) {
@@ -631,8 +626,6 @@
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
     $('runBtn').onclick = runAction;
-    $('joinAdBtn').onclick = function () { runAdAction('join'); };
-    $('forceNameBtn').onclick = function () { runAdAction('forceNameChange'); };
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
     $('refreshTasksBtn').onclick = function () { pollActiveTasks(); };
     $('cancelTasksBtn').onclick = cancelSelectedTasks;
