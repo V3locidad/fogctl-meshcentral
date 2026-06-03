@@ -2,5 +2,12 @@
   "fogUrl": "http://fog.local",
   "apiToken": "PUT_FOG_API_TOKEN_HERE",
   "userToken": "PUT_FOG_USER_TOKEN_HERE",
-  "rejectUnauthorized": true
+  "rejectUnauthorized": true,
+  "ad": {
+    "domain": "l-graves.local",
+    "ou": "",
+    "user": "admin",
+    "password": "CHANGE_ME",
+    "passwordLegacy": "CHANGE_ME_ENCRYPTED"
+  }
 }

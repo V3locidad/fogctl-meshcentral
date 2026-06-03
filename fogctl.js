@@ -229,6 +229,15 @@ module.exports.fogctl = function (parent) {
             var wantShutdown = req.query.shutdown === '1';
             var out = {};
             var qq = ids.slice();
+            // Force REBOOT comme BIOS/EFI exit type sur tout host visé : sans
+            // ça FOG laisse l'OS d'origine au reboot et le PXE ne relance pas
+            // pour les tâches qui en ont besoin (capture multi-phase, etc.).
+            // Persistant côté FOG — pas de restauration.
+            function ensureRebootExit(id) {
+                return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), {
+                    biosexit: 'REBOOT', efiexit: 'REBOOT'
+                }).catch(function () { /* non bloquant */ });
+            }
             function postTask(id) {
                 var endpoint, body;
                 if (scheduledFor) {
@@ -259,18 +268,16 @@ module.exports.fogctl = function (parent) {
                 //   (l'override UI est ignoré, on respecte le réglage FOG)
                 // - sinon, si un override est fourni → PUT pour assigner l'image
                 //   temporairement le temps que la task puisse partir
-                var p;
-                if (!overrideImg) {
-                    p = postTask(id);
-                } else {
-                    p = fogCall('GET', '/fog/host/' + encodeURIComponent(id)).then(function (r) {
+                var p = ensureRebootExit(id).then(function () {
+                    if (!overrideImg) return postTask(id);
+                    return fogCall('GET', '/fog/host/' + encodeURIComponent(id)).then(function (r) {
                         var host = (r.data && (r.data.host || r.data)) || {};
                         var hasImg = host.imageID && parseInt(host.imageID, 10) > 0;
                         if (hasImg) return postTask(id);
                         return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
                             .then(function () { return postTask(id); });
                     });
-                }
+                });
                 p.then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                  .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
@@ -278,6 +285,48 @@ module.exports.fogctl = function (parent) {
         }
 
         // -------- imageList: list FOG images for the deploy override dropdown --------
+        // -------- setupAd: configure AD fields + active useAD/enforce sur hosts --
+        // mode = 'join' → useAD=1, mode = 'forceNameChange' → enforce=1.
+        // Si les champs AD du host sont vides, on les remplit depuis cfg.ad.
+        // Si déjà renseignés sur le host, on n'écrase pas — on ne fait qu'ajouter
+        // le flag demandé.
+        if (action === 'setupAd') {
+            var adMode = req.query.mode;
+            if (adMode !== 'join' && adMode !== 'forceNameChange') return sendJson(res, 400, { error: 'mode invalide (join|forceNameChange)' });
+            var adIds = (req.query.hostIds || '').split(',').filter(Boolean);
+            if (!adIds.length) return sendJson(res, 400, { error: 'no host ids' });
+            var cfgAd = loadConfig();
+            if (!cfgAd) return sendJson(res, 200, { ok: false, error: 'fog-config.json missing or invalid' });
+            var defaults = cfgAd.ad || {};
+            var adOut = {};
+            var adQ = adIds.slice();
+            function adStep() {
+                if (!adQ.length) return sendJson(res, 200, { ok: true, results: adOut });
+                var id = adQ.shift();
+                fogCall('GET', '/fog/host/' + encodeURIComponent(id)).then(function (r) {
+                    var host = (r.data && (r.data.host || r.data)) || {};
+                    var patch = {};
+                    function fillIfEmpty(key, val) {
+                        if (val == null || val === '') return;
+                        if (!host[key] || String(host[key]).trim() === '') patch[key] = val;
+                    }
+                    fillIfEmpty('ADDomain', defaults.domain);
+                    fillIfEmpty('ADOU', defaults.ou);
+                    fillIfEmpty('ADUser', defaults.user);
+                    fillIfEmpty('ADPass', defaults.password);
+                    fillIfEmpty('ADPassLegacy', defaults.passwordLegacy);
+                    if (adMode === 'join') patch.useAD = 1;
+                    if (adMode === 'forceNameChange') patch.enforce = 1;
+                    return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), patch).then(function () {
+                        adOut[id] = { ok: true, patched: Object.keys(patch) };
+                    });
+                }).catch(function (e) {
+                    adOut[id] = { ok: false, error: e.message };
+                }).then(adStep);
+            }
+            return adStep();
+        }
+
         if (action === 'imageList') {
             return fogCall('GET', '/fog/image')
                 .then(function (r) {

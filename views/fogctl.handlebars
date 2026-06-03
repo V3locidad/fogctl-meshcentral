@@ -69,6 +69,8 @@
   <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
   <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
   <button id="runBtn" class="primary">Run on selected</button>
+  <button id="joinAdBtn" title="Set useAD=1 on the selected hosts (fill AD fields from server config if empty)">Join domain</button>
+  <button id="forceNameBtn" title="Set enforce=1 on the selected hosts (force name change / AD join reboot)">Force name change</button>
   <span id="progress"></span>
   <span style="margin-left:auto">
     <button id="logsBtn">Logs</button>
@@ -491,6 +493,37 @@
     }).catch(function (e) { log('snapinList failed: ' + e.message); });
   }
 
+  function runAdAction(mode) {
+    var ids = selectedNodeIds();
+    if (!ids.length) { alert('No computer selected.'); return; }
+    var missing = ids.filter(function (id) { return state.fogMap[id] === undefined; });
+    var p = missing.length ? lookupSelected() : Promise.resolve();
+    p.then(function () {
+      var hostIds = [];
+      ids.forEach(function (id) {
+        var f = state.fogMap[id];
+        if (f && f.id) hostIds.push(f.id);
+      });
+      if (!hostIds.length) { alert('None of the selected computers are known to FOG.'); return; }
+      var label = (mode === 'join') ? 'Join domain' : 'Force name change';
+      if (!confirm(label + ' on ' + hostIds.length + ' host(s)?')) return;
+      log(label + ' on ' + hostIds.length + ' host(s)…');
+      api('setupAd', { mode: mode, hostIds: hostIds.join(',') }).then(function (r) {
+        if (r && r.results) {
+          var ok = 0, ko = 0, patched = 0;
+          Object.keys(r.results).forEach(function (hid) {
+            var res = r.results[hid];
+            if (res.ok) { ok++; if (res.patched && res.patched.length) patched += res.patched.length; }
+            else ko++;
+          });
+          log(label + ' done. ' + ok + ' ok, ' + ko + ' failed, ' + patched + ' field(s) patched.');
+        } else if (r && r.error) {
+          log('Error: ' + r.error);
+        }
+      }).catch(function (e) { log('Request failed: ' + e.message); });
+    });
+  }
+
   function runAction() {
     var action = $('actionSel').value;
     var ids = selectedNodeIds();
@@ -598,6 +631,8 @@
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
     $('runBtn').onclick = runAction;
+    $('joinAdBtn').onclick = function () { runAdAction('join'); };
+    $('forceNameBtn').onclick = function () { runAdAction('forceNameChange'); };
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
     $('refreshTasksBtn').onclick = function () { pollActiveTasks(); };
     $('cancelTasksBtn').onclick = cancelSelectedTasks;
