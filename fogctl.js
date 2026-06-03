@@ -254,14 +254,23 @@ module.exports.fogctl = function (parent) {
                 if (!qq.length) return sendJson(res, 200, { ok: true, results: out });
                 var id = qq.shift();
                 // L'API FOG ignore imageID dans le body POST /host/:id/task : la
-                // task se base sur host.imageID assigné. Pour overrider, on
-                // assigne l'image au host via PUT, puis on poste la task. Sans
-                // ce PUT, si le host n'a pas d'image par défaut, FOG refuse la
-                // task avec « no image assigned ».
-                var p = overrideImg
-                    ? fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
-                        .then(function () { return postTask(id); })
-                    : postTask(id);
+                // task se base sur host.imageID. Politique d'override :
+                // - si le host a déjà une image par défaut → on ne touche à rien
+                //   (l'override UI est ignoré, on respecte le réglage FOG)
+                // - sinon, si un override est fourni → PUT pour assigner l'image
+                //   temporairement le temps que la task puisse partir
+                var p;
+                if (!overrideImg) {
+                    p = postTask(id);
+                } else {
+                    p = fogCall('GET', '/fog/host/' + encodeURIComponent(id)).then(function (r) {
+                        var host = (r.data && (r.data.host || r.data)) || {};
+                        var hasImg = host.imageID && parseInt(host.imageID, 10) > 0;
+                        if (hasImg) return postTask(id);
+                        return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
+                            .then(function () { return postTask(id); });
+                    });
+                }
                 p.then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                  .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
