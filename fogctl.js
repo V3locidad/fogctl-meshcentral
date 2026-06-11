@@ -294,13 +294,27 @@ module.exports.fogctl = function (parent) {
                 }
                 var id = qq.shift();
                 // L'API FOG ignore imageID dans le body POST /host/:id/task :
-                // la task se base sur host.imageID. Si un override UI est fourni,
-                // on PUT systématiquement (l'admin veut explicitement cette image)
-                // — l'image précédente du host est écrasée durablement côté FOG.
+                // la task se base sur host.imageID, et FOG snapshot cette imageID
+                // dans la task au moment de la création. Stratégie d'override :
+                // - GET host pour récupérer l'imageID actuelle
+                // - PUT host avec l'image choisie
+                // - POST task (FOG snapshot l'image dans la task)
+                // - si une image était déjà assignée → PUT remet l'originale,
+                //   sinon on laisse l'image choisie attribuée au host.
                 var p = ensureRebootExit(id).then(function () {
                     if (!overrideImg) return postTask(id);
-                    return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
-                        .then(function () { return postTask(id); });
+                    return fogCall('GET', '/fog/host/' + encodeURIComponent(id)).then(function (r) {
+                        var host = (r.data && (r.data.host || r.data)) || {};
+                        var origImg = (host.imageID && parseInt(host.imageID, 10) > 0) ? parseInt(host.imageID, 10) : null;
+                        return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: parseInt(overrideImg, 10) })
+                            .then(function () { return postTask(id); })
+                            .then(function (taskRes) {
+                                if (origImg === null || origImg === parseInt(overrideImg, 10)) return taskRes;
+                                return fogCall('PUT', '/fog/host/' + encodeURIComponent(id), { imageID: origImg })
+                                    .then(function () { return taskRes; })
+                                    .catch(function () { return taskRes; });
+                            });
+                    });
                 });
                 p.then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
                  .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
