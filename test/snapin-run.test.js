@@ -28,6 +28,10 @@ async function harness(t, respond) {
                         ? { status: 200, data: scheduledTasks.get(match[1]) }
                         : { status: 404, data: { error: 'Not found' } };
                 }
+                if (request.method === 'DELETE' && match) {
+                    scheduledTasks.delete(match[1]);
+                    return { status: 200, data: '' };
+                }
                 return { status: 200, data: '' };
             }
             const reply = (respond && respond(request, defaultReply)) || defaultReply();
@@ -268,11 +272,13 @@ test('the browser sends Unix seconds for the selected local time and logs the ve
             return Promise.resolve({ results: { '1038': { ok: true, scheduledTaskId: 700 } } });
         }
     };
-    vm.runInNewContext(runAction + '\nrunAction();', sandbox);
+    const timeHelper = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function updateScheduleTimezone('));
+    vm.runInNewContext(timeHelper + runAction + '\nrunAction();', sandbox);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].params.scheduleTime, String(new Date('2030-01-15T10:30').getTime() / 1000));
     assert.ok(logs.some(message => message.includes('scheduled task #700')));
+    assert.ok(logs.some(message => message.includes('UTC')));
     assert.deepEqual(tabs, ['scheduled']);
 });
 
@@ -315,32 +321,40 @@ test('scheduledTasks distinguishes an empty list from API errors and invalid dat
 
 function scheduledTabHarness() {
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const code = source.slice(source.indexOf('  function renderScheduledTasks() {'), source.indexOf('  function showTasks(v) {'));
+    const code = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function showTasks(v) {'));
     const elements = {};
     const state = {
         taskTab: 'active', scheduledList: [], snapins: [], scheduledLoaded: false,
-        scheduledLoading: false, scheduledError: '', checkedTasks: { '99': true }
+        scheduledLoading: false, scheduledError: '', checkedTasks: { '99': true },
+        checkedScheduledTasks: {}, cancellingScheduled: false
     };
-    const calls = [];
+    const calls = [], params = [], logs = [], alerts = [];
     let reply = { tasks: [] };
     const sandbox = {
         state,
         $: id => elements[id] || (elements[id] = {
-            setAttribute(key, value) { this[key] = value; }, focus() { this.focused = true; }
+            setAttribute(key, value) { this[key] = value; }, focus() { this.focused = true; },
+            querySelectorAll() {
+                this.boxes = Array.from((this.innerHTML || '').matchAll(/<input[^>]+data-scheduled-id="([^"]+)"[^>]*>/g), match => ({
+                    checked: match[0].includes(' checked'), getAttribute() { return match[1]; }
+                }));
+                return this.boxes;
+            }
         }),
         escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
-        api: action => { calls.push(action); return Promise.resolve(reply); },
+        api: (action, data) => { calls.push(action); params.push(data); return Promise.resolve(typeof reply === 'function' ? reply(action, data) : reply); },
+        confirm: () => true, log: message => logs.push(message), alert: message => alerts.push(message),
         pollActiveTasks: () => calls.push('activeTasks')
     };
     vm.runInNewContext(code, sandbox);
-    return { sandbox, state, elements, calls, reply(value) { reply = value; } };
+    return { sandbox, state, elements, calls, params, logs, alerts, reply(value) { reply = value; } };
 }
 
 test('scheduled tab renders target, snapin and recurrence safely and preserves rows on failure', async () => {
     const h = scheduledTabHarness();
     h.state.snapins = [{ id: '41', name: '<script>bad</script>' }];
     h.reply({ tasks: [
-        { taskId: '8', targetName: '<b>PC</b>', type: '13', label: 'Single Snapin', snapinId: '41', scheduleType: 'S', scheduleTime: 1894699800 },
+        { taskId: '8', targetName: '<b>PC</b>', type: '13', label: 'Single Snapin', snapinId: '41', scheduleType: 'S', scheduleTime: 1894699800, runtime: '2030-01-15 09:30' },
         { taskId: '9', targetName: 'Room A', isGroup: true, label: 'Capture', scheduleType: 'C', runtime: '2030-01-16 07:00', cron: '0 7 * * 1-5' }
     ] });
     await h.sandbox.pollScheduledTasks();
@@ -348,23 +362,27 @@ test('scheduled tab renders target, snapin and recurrence safely and preserves r
     assert.ok(html.includes('&lt;b&gt;PC&lt;/b&gt;'));
     assert.ok(html.includes('&lt;script&gt;bad&lt;/script&gt;'));
     assert.ok(html.includes('Groupe : Room A'));
-    assert.ok(html.includes('2030-01-16 07:00 (heure FOG)'));
+    assert.ok(html.includes('2030-01-16 07:00'));
+    assert.ok(html.includes('2030-01-15 09:30'));
+    assert.ok(html.includes(new Date(1894699800000).toLocaleString()));
+    assert.ok(html.includes(h.sandbox.localTimeZone(new Date(1894699800000))));
     assert.ok(html.includes('0 7 * * 1-5'));
     assert.ok(html.includes('#8'));
     h.reply({ error: 'FOG unavailable' });
     await h.sandbox.pollScheduledTasks();
-    assert.equal(h.elements.scheduledBody.innerHTML, html);
+    assert.equal(h.elements.scheduledBody.innerHTML.replace(/ disabled/g, ''), html);
     assert.match(h.elements.scheduledMessage.textContent, /FOG unavailable.*Dernières données conservées/);
     assert.equal(h.elements.scheduledCount.textContent, 2);
 });
 
-test('tabs switch by mouse or keyboard and keep cancellation exclusive to active tasks', async () => {
+test('tabs switch by mouse or keyboard and use separate cancellation controls', async () => {
     const h = scheduledTabHarness();
     h.sandbox.selectTaskTab('scheduled');
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(h.elements.activeTasksPane.hidden, true);
     assert.equal(h.elements.scheduledTasksPane.hidden, false);
     assert.equal(h.elements.cancelTasksBtn.hidden, true);
+    assert.equal(h.elements.cancelScheduledBtn.hidden, false);
     assert.equal(h.elements.scheduledTasksTab['aria-selected'], 'true');
     assert.match(h.elements.scheduledBody.innerHTML, /Aucune tâche planifiée/);
     let prevented = false;
@@ -372,7 +390,150 @@ test('tabs switch by mouse or keyboard and keep cancellation exclusive to active
     assert.equal(prevented, true);
     assert.equal(h.elements.activeTasksPane.hidden, false);
     assert.equal(h.elements.cancelTasksBtn.hidden, false);
+    assert.equal(h.elements.cancelScheduledBtn.hidden, true);
     assert.equal(h.elements.activeTasksTab.focused, true);
     assert.deepEqual(h.state.checkedTasks, { '99': true });
     assert.deepEqual(h.calls, ['scheduledTasks', 'activeTasks']);
+});
+
+test('cancelling schedules deletes only selected IDs once and verifies their absence', { timeout: 5000 }, async t => {
+    const h = await harness(t);
+    await h.call({ action: 'snapinRun', hostIds: '1031,1032,1033', snapinId: '41', scheduleTime: '1894699800' });
+    h.requests.length = 0;
+    const response = await h.call({ action: 'cancelScheduled', taskIds: '700,701,700' });
+    assert.deepEqual(response.body.results, { '700': { ok: true }, '701': { ok: true } });
+    assert.deepEqual(h.requests, ['700', '701'].flatMap(id => ['GET', 'DELETE', 'GET'].map(method => ({
+        method, path: '/fog/scheduledtask/' + id, body: null
+    }))));
+});
+
+test('invalid cancellation IDs never cause a FOG call', { timeout: 5000 }, async t => {
+    const h = await harness(t);
+    for (const ids of ['', '0', '-1', '1.5', '700,', '700,no', '700/../../task/99', '9007199254740992']) {
+        const response = await h.call({ action: 'cancelScheduled', taskIds: ids });
+        assert.equal(response.status, 400, ids);
+    }
+    assert.equal(h.requests.length, 0);
+});
+
+test('inactive, missing and malformed schedules are not deleted', { timeout: 5000 }, async t => {
+    for (const reply of [
+        { status: 200, data: { id: '7', isActive: 0 } },
+        { status: 200, data: { id: '8', isActive: 1 } },
+        { status: 404, data: { error: 'Missing' } },
+        { status: 200, data: '' }
+    ]) {
+        const h = await harness(t, () => reply);
+        const response = await h.call({ action: 'cancelScheduled', taskIds: '7' });
+        assert.equal(response.body.results['7'].ok, false);
+        assert.deepEqual(h.requests.map(r => r.method), ['GET']);
+    }
+});
+
+test('cancellation failures stay per-ID and neither a 2xx nor failed verification proves removal', { timeout: 5000 }, async t => {
+    const h = await harness(t, (r, fallback) => {
+        if (r.method !== 'DELETE') return;
+        if (r.path.endsWith('/700')) return { status: 200, data: '' }; // No deletion.
+        if (r.path.endsWith('/701')) return { status: 200, data: { error: { message: 'Permission denied' } } };
+        return fallback();
+    });
+    await h.call({ action: 'snapinRun', hostIds: '1031,1032,1033', snapinId: '41', scheduleTime: '1894699800' });
+    h.requests.length = 0;
+    const response = await h.call({ action: 'cancelScheduled', taskIds: '700,701,702' });
+    assert.equal(response.body.results['700'].ok, false);
+    assert.match(response.body.results['700'].error, /encore cette planification/);
+    assert.match(response.body.results['701'].error, /Permission denied/);
+    assert.equal(response.body.results['702'].ok, true);
+    assert.equal(h.requests.filter(r => r.method === 'DELETE').length, 3);
+
+    for (const reply of [{ status: 503, data: '' }, { status: 200, data: '' }]) {
+        let deleted = false;
+        const failing = await harness(t, r => {
+            if (r.method === 'DELETE') { deleted = true; return { status: 204, data: '' }; }
+            return deleted ? reply : { status: 200, data: { id: 7, isActive: 1 } };
+        });
+        const result = await failing.call({ action: 'cancelScheduled', taskIds: '7' });
+        assert.equal(result.body.results['7'].ok, false);
+    }
+});
+
+test('scheduled selection survives refresh, supports select-all and prunes disappeared tasks', async () => {
+    const h = scheduledTabHarness();
+    const tasks = [{ taskId: '7' }, { taskId: '8' }];
+    h.reply({ tasks });
+    await h.sandbox.pollScheduledTasks();
+    const box = h.elements.scheduledBody.boxes[0];
+    box.checked = true;
+    box.onchange();
+    assert.equal(h.elements.scheduledCheckAll.indeterminate, true);
+    assert.equal(h.elements.cancelScheduledBtn.disabled, false);
+    await h.sandbox.pollScheduledTasks();
+    assert.equal(h.elements.scheduledBody.boxes[0].checked, true);
+    h.elements.scheduledCheckAll.checked = true;
+    h.elements.scheduledCheckAll.onchange();
+    assert.deepEqual(Object.keys(h.state.checkedScheduledTasks), ['7', '8']);
+    h.reply({ tasks: [tasks[1]] });
+    await h.sandbox.pollScheduledTasks();
+    assert.deepEqual(Object.keys(h.state.checkedScheduledTasks), ['8']);
+    assert.deepEqual(h.state.checkedTasks, { '99': true });
+});
+
+test('scheduled cancellation uses its own endpoint, prevents repeats, and retains failed selections', async () => {
+    const h = scheduledTabHarness();
+    h.state.scheduledList = [{ taskId: '7' }, { taskId: '8' }];
+    h.state.checkedScheduledTasks = { '7': true, '8': true };
+    let finish;
+    h.reply(action => action === 'cancelScheduled' ? new Promise(resolve => { finish = resolve; }) : { tasks: [{ taskId: '8' }] });
+    const pending = h.sandbox.cancelSelectedScheduledTasks();
+    assert.equal(h.elements.cancelScheduledBtn.disabled, true);
+    await h.sandbox.cancelSelectedScheduledTasks();
+    await h.sandbox.pollScheduledTasks();
+    assert.deepEqual(h.calls, ['cancelScheduled']);
+    assert.equal(h.params[0].taskIds, '7,8');
+    finish({ results: { '7': { ok: true }, '8': { ok: false, error: 'Denied' } } });
+    await pending;
+    assert.deepEqual(Object.keys(h.state.checkedScheduledTasks), ['8']);
+    assert.deepEqual(h.state.checkedTasks, { '99': true });
+    assert.deepEqual(h.calls, ['cancelScheduled', 'scheduledTasks']);
+    assert.ok(h.logs.some(log => /1 OK, 1 échec/.test(log)));
+    assert.equal(h.alerts.length, 1);
+    assert.equal(h.state.cancellingScheduled, false);
+});
+
+test('declining confirmation or a failed request never clears scheduled selections', async () => {
+    const h = scheduledTabHarness();
+    h.state.scheduledList = [{ taskId: '7' }];
+    h.state.checkedScheduledTasks = { '7': true };
+    h.sandbox.confirm = () => false;
+    await h.sandbox.cancelSelectedScheduledTasks();
+    assert.deepEqual(h.calls, []);
+    h.sandbox.confirm = () => true;
+    h.reply(action => action === 'cancelScheduled' ? Promise.reject(new Error('Unavailable')) : { tasks: [{ taskId: '7' }] });
+    await h.sandbox.cancelSelectedScheduledTasks();
+    assert.deepEqual(Object.keys(h.state.checkedScheduledTasks), ['7']);
+    assert.ok(h.alerts[0].includes('Unavailable'));
+    assert.equal(h.state.cancellingScheduled, false);
+});
+
+test('timezone labels follow the selected date, including Paris summer and winter offsets', () => {
+    const { execFileSync } = require('node:child_process');
+    const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
+    const helper = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function updateScheduledSelection('));
+    const script = helper + `
+        const elements = { scheduleOn: { checked: true }, scheduleAt: {}, scheduleTimezone: {} };
+        function $(id) { return elements[id]; }
+        const results = ['2030-01-15T10:45', '2030-07-15T10:45'].map(value => {
+            elements.scheduleAt.value = value;
+            updateScheduleTimezone();
+            return [elements.scheduleTimezone.textContent, new Date(value).toISOString()];
+        });
+        console.log(JSON.stringify(results));`;
+    const paris = JSON.parse(execFileSync(process.execPath, ['-e', script], { env: { ...process.env, TZ: 'Europe/Paris' }, encoding: 'utf8' }));
+    assert.deepEqual(paris, [
+        ['Heure locale : Europe/Paris (UTC+01:00)', '2030-01-15T09:45:00.000Z'],
+        ['Heure locale : Europe/Paris (UTC+02:00)', '2030-07-15T08:45:00.000Z']
+    ]);
+    const utc = JSON.parse(execFileSync(process.execPath, ['-e', script], { env: { ...process.env, TZ: 'UTC' }, encoding: 'utf8' }));
+    assert.equal(utc[1][1], '2030-07-15T10:45:00.000Z');
+    assert.match(utc[1][0], /UTC\+00:00/);
 });

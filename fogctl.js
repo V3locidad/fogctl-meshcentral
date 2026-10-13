@@ -95,7 +95,9 @@ module.exports.fogctl = function (parent) {
                         // Redirects usually mean wrong URL or unauthenticated (FOG sends you to its login page).
                         reject(new Error('FOG ' + res.statusCode + ' redirect to: ' + (res.headers.location || '(no Location header)')));
                     } else {
-                        reject(new Error('FOG ' + res.statusCode + ': ' + (data && data.error ? data.error : text.slice(0, 200))));
+                        var error = new Error('FOG ' + res.statusCode + ': ' + (data && data.error ? data.error : text.slice(0, 200)));
+                        error.statusCode = res.statusCode;
+                        reject(error);
                     }
                 });
             });
@@ -630,6 +632,48 @@ module.exports.fogctl = function (parent) {
                     sendJson(res, 200, { tasks: list, count: list.length });
                 })
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
+        }
+
+        // -------- cancelScheduled: remove only explicitly selected schedules --------
+        // FOG 1.5.10's /cancel route checks stateID (absent on schedules), so
+        // use DELETE on the resource, as FOG's Scheduled Tasks page does.
+        if (action === 'cancelScheduled') {
+            var scheduledIds = String(req.query.taskIds || '').split(',').map(function (id) { return id.trim(); });
+            if (!scheduledIds.length || scheduledIds.some(function (id) {
+                return !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id));
+            })) return sendJson(res, 400, { error: 'Valid scheduled task IDs required' });
+            scheduledIds = scheduledIds.filter(function (id, index, all) { return all.indexOf(id) === index; });
+            var scheduledResults = {};
+            function cancelSchedule(id) {
+                var endpoint = '/fog/scheduledtask/' + id;
+                return fogCall('GET', endpoint).then(function (r) {
+                    var task = r.data && (r.data.scheduledtask || r.data);
+                    if (!task || Number(task.id) !== Number(id) || Number(task.isActive) !== 1) {
+                        throw new Error('Planification inactive ou invalide. Vérifiez les tâches actives si elle a déjà démarré.');
+                    }
+                    return fogCall('DELETE', endpoint);
+                }).then(function (r) {
+                    if (r.data && r.data.error) {
+                        throw new Error('FOG: ' + (r.data.error.message || r.data.error));
+                    }
+                    return fogCall('GET', endpoint).then(function () {
+                        throw new Error('FOG contient encore cette planification ; annulation non confirmée.');
+                    }, function (e) {
+                        if (e.statusCode === 404) return;
+                        throw new Error('Vérification de l’annulation impossible : ' + e.message);
+                    });
+                });
+            }
+            function nextScheduledCancellation() {
+                if (!scheduledIds.length) return sendJson(res, 200, { results: scheduledResults });
+                var id = scheduledIds.shift();
+                return cancelSchedule(id).then(function () {
+                    scheduledResults[id] = { ok: true };
+                }, function (e) {
+                    scheduledResults[id] = { ok: false, error: e.message };
+                }).then(nextScheduledCancellation);
+            }
+            return nextScheduledCancellation();
         }
 
         // -------- cancel: cancel one or several tasks --------

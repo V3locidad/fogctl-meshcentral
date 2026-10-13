@@ -76,6 +76,7 @@
   <label title="Shut down the host after the task completes"><input type="checkbox" id="optShutdown"> Shutdown after</label>
   <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
   <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
+  <small id="scheduleTimezone" hidden></small>
   <label style="margin-left:8px" title="Set useAD=1 on each host before the task (fill AD fields from server config if empty)"><input type="checkbox" id="optJoinAd"> Join domain</label>
   <label title="Set enforce=1 on each host before the task (force name change / AD join reboot)"><input type="checkbox" id="optForceName"> Force name change</label>
   <button id="runBtn" class="primary">Run on selected</button>
@@ -98,6 +99,7 @@
     <span class="spacer"></span>
     <button id="refreshTasksBtn">Refresh</button>
     <button id="cancelTasksBtn" class="primary">Cancel selected</button>
+    <button id="cancelScheduledBtn" class="primary" hidden disabled>Annuler la sélection</button>
   </div>
   <div id="activeTasksPane" role="tabpanel" aria-labelledby="activeTasksTab">
    <div id="tasksTableWrap">
@@ -120,7 +122,7 @@
     <div id="scheduledMessage" role="status" aria-live="polite"></div>
     <div id="scheduledTableWrap">
       <table id="scheduledTable">
-        <thead><tr><th>Poste / groupe</th><th>Type / snapin</th><th>Date prévue</th><th>État</th><th>ID FOG</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="scheduledCheckAll" aria-label="Sélectionner toutes les tâches planifiées"></th><th>Poste / groupe</th><th>Type / snapin</th><th>Heure FOG</th><th>Heure locale</th><th>État</th><th>ID FOG</th></tr></thead>
         <tbody id="scheduledBody"></tbody>
       </table>
     </div>
@@ -162,7 +164,9 @@
     scheduledList: [],
     scheduledLoaded: false,
     scheduledLoading: false,
-    scheduledError: ''
+    scheduledError: '',
+    checkedScheduledTasks: {},
+    cancellingScheduled: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -464,13 +468,41 @@
     }
   }
 
+  function localTimeZone(date) {
+    var zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'heure locale';
+    var offset = -date.getTimezoneOffset();
+    if (!Number.isFinite(offset)) return zone;
+    var pad = function (n) { return ('0' + n).slice(-2); };
+    return zone + ' (UTC' + (offset >= 0 ? '+' : '−') + pad(Math.floor(Math.abs(offset) / 60)) + ':' + pad(Math.abs(offset) % 60) + ')';
+  }
+
+  function updateScheduleTimezone() {
+    var date = $('scheduleAt').value ? new Date($('scheduleAt').value) : new Date();
+    $('scheduleTimezone').hidden = !$('scheduleOn').checked;
+    $('scheduleTimezone').textContent = 'Heure locale : ' + localTimeZone(date);
+  }
+
+  function updateScheduledSelection() {
+    var count = Object.keys(state.checkedScheduledTasks).length;
+    var busy = state.cancellingScheduled || state.scheduledLoading;
+    $('cancelScheduledBtn').disabled = !count || busy || !!state.scheduledError;
+    $('cancelScheduledBtn').textContent = state.cancellingScheduled ? 'Annulation…' : 'Annuler la sélection' + (count ? ' (' + count + ')' : '');
+    var all = $('scheduledCheckAll');
+    all.checked = state.scheduledList.length > 0 && count === state.scheduledList.length;
+    all.indeterminate = count > 0 && count < state.scheduledList.length;
+    all.disabled = !state.scheduledList.length || busy || !!state.scheduledError;
+  }
+
   function renderScheduledTasks() {
+    var live = {};
+    state.scheduledList.forEach(function (t) { live[t.taskId] = true; });
+    Object.keys(state.checkedScheduledTasks).forEach(function (id) { if (!live[id]) delete state.checkedScheduledTasks[id]; });
     $('scheduledCount').textContent = state.scheduledLoaded ? state.scheduledList.length : '—';
     var message = $('scheduledMessage');
     message.className = state.scheduledError ? 'error' : '';
     message.textContent = state.scheduledError
       ? 'Actualisation impossible : ' + state.scheduledError + (state.scheduledLoaded ? ' — Dernières données conservées.' : '')
-      : (state.scheduledLoading ? 'Chargement…' : 'Dates dans votre fuseau horaire. Les récurrences sont indiquées en heure FOG.');
+      : (state.scheduledLoading ? 'Chargement…' : 'Heure FOG : affichage du serveur. Heure locale : fuseau du navigateur. Un écart de fuseau ne change pas l’instant d’exécution.');
     var rows = state.scheduledList.map(function (t) {
       var target = t.targetName || ((t.isGroup ? 'Groupe #' : 'Poste #') + t.targetId);
       if (t.isGroup && t.targetName) target = 'Groupe : ' + target;
@@ -479,28 +511,51 @@
         var snapin = state.snapins.find(function (s) { return String(s.id) === String(t.snapinId); });
         details = '<small class="scheduled-details">' + escapeHtml(snapin ? snapin.name : ('Snapin #' + t.snapinId)) + '</small>';
       }
-      var date, status;
+      var localDate = '—', status;
       if (t.scheduleType === 'C') {
-        date = (t.runtime || 'Date indisponible') + ' (heure FOG)';
         status = 'Récurrente';
         details += '<small class="scheduled-details">Cron : ' + escapeHtml(t.cron) + '</small>';
       } else {
-        date = t.scheduleTime ? new Date(t.scheduleTime * 1000).toLocaleString() : 'Date indisponible';
+        if (t.scheduleTime) {
+          var date = new Date(t.scheduleTime * 1000);
+          localDate = escapeHtml(date.toLocaleString()) + '<small class="scheduled-details">' + escapeHtml(localTimeZone(date)) + '</small>';
+        }
         status = t.scheduleTime && t.scheduleTime * 1000 <= Date.now() ? 'Échéance atteinte' : 'En attente';
       }
+      var checked = state.checkedScheduledTasks[t.taskId] ? ' checked' : '';
+      var disabled = state.cancellingScheduled || state.scheduledLoading || state.scheduledError ? ' disabled' : '';
       return '<tr title="' + escapeHtml(t.name) + '">'
+        + '<td><input type="checkbox" data-scheduled-id="' + escapeHtml(t.taskId) + '" aria-label="Sélectionner la tâche planifiée #' + escapeHtml(t.taskId) + '"' + checked + disabled + '></td>'
         + '<td>' + escapeHtml(target) + '</td>'
         + '<td>' + escapeHtml(t.label) + details + '</td>'
-        + '<td class="schedule-date">' + escapeHtml(date) + '</td>'
+        + '<td class="schedule-date">' + escapeHtml(t.runtime || 'Date indisponible') + '</td>'
+        + '<td class="schedule-date">' + localDate + '</td>'
         + '<td>' + escapeHtml(status) + '</td>'
         + '<td>#' + escapeHtml(t.taskId) + '</td></tr>';
     }).join('');
     var empty = state.scheduledError ? 'Liste indisponible.' : (state.scheduledLoaded ? 'Aucune tâche planifiée en attente.' : 'Chargement…');
-    $('scheduledBody').innerHTML = rows || '<tr><td colspan="5" style="text-align:center;color:#888;padding:10px">' + empty + '</td></tr>';
+    $('scheduledBody').innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:#888;padding:10px">' + empty + '</td></tr>';
+    [].slice.call($('scheduledBody').querySelectorAll('input[data-scheduled-id]')).forEach(function (cb) {
+      cb.onchange = function () {
+        var id = cb.getAttribute('data-scheduled-id');
+        if (cb.checked) state.checkedScheduledTasks[id] = true;
+        else delete state.checkedScheduledTasks[id];
+        updateScheduledSelection();
+      };
+    });
+    $('scheduledCheckAll').onchange = function () {
+      var checked = this.checked;
+      state.scheduledList.forEach(function (t) {
+        if (checked) state.checkedScheduledTasks[t.taskId] = true;
+        else delete state.checkedScheduledTasks[t.taskId];
+      });
+      renderScheduledTasks();
+    };
+    updateScheduledSelection();
   }
 
   function pollScheduledTasks() {
-    if (state.scheduledLoading) return;
+    if (state.scheduledLoading || state.cancellingScheduled) return;
     state.scheduledLoading = true;
     renderScheduledTasks();
     return api('scheduledTasks').then(function (r) {
@@ -518,12 +573,45 @@
     });
   }
 
+  function cancelSelectedScheduledTasks() {
+    if (state.cancellingScheduled || state.scheduledLoading || state.scheduledError) return;
+    var ids = Object.keys(state.checkedScheduledTasks);
+    if (!ids.length) return;
+    if (!confirm('Annuler ' + ids.length + ' tâche(s) planifiée(s) dans FOG ? Une récurrence sélectionnée sera également supprimée. Si une tâche a déjà démarré, vérifiez l’onglet Tâches actives.')) return;
+    state.cancellingScheduled = true;
+    renderScheduledTasks();
+    return api('cancelScheduled', { taskIds: ids.join(',') }).then(function (r) {
+      if (!r || !r.results) throw new Error(r && r.error || 'Réponse FOG invalide');
+      var ok = 0, ko = 0;
+      ids.forEach(function (id) {
+        var result = r.results[id];
+        if (result && result.ok) {
+          ok++;
+          delete state.checkedScheduledTasks[id];
+          state.scheduledList = state.scheduledList.filter(function (t) { return String(t.taskId) !== id; });
+        } else {
+          ko++;
+          log('Planification #' + id + ' : ' + (result && result.error || 'Annulation non confirmée'));
+        }
+      });
+      log('Annulation des planifications : ' + ok + ' OK, ' + ko + ' échec(s).');
+      if (ko) alert(ko + ' annulation(s) non confirmée(s). Consultez les Logs.');
+    }).catch(function (e) {
+      log('Annulation des planifications impossible : ' + e.message);
+      alert('Annulation impossible : ' + e.message);
+    }).then(function () {
+      state.cancellingScheduled = false;
+      return pollScheduledTasks();
+    });
+  }
+
   function selectTaskTab(tab) {
     var scheduled = tab === 'scheduled';
     state.taskTab = scheduled ? 'scheduled' : 'active';
     $('activeTasksPane').hidden = scheduled;
     $('scheduledTasksPane').hidden = !scheduled;
     $('cancelTasksBtn').hidden = scheduled;
+    $('cancelScheduledBtn').hidden = !scheduled;
     $('activeTasksTab').setAttribute('aria-selected', String(!scheduled));
     $('scheduledTasksTab').setAttribute('aria-selected', String(scheduled));
     $('activeTasksTab').tabIndex = scheduled ? -1 : 0;
@@ -732,7 +820,7 @@
       var flags = [];
       if ($('optWol').checked) flags.push('WoL');
       if ($('optShutdown').checked) flags.push('shutdown after');
-      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ')) : '';
+      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ') + ' ' + localTimeZone(new Date($('scheduleAt').value))) : '';
       var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
               + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '')
               + when
@@ -865,6 +953,7 @@
     $('activeTasksTab').onkeydown = taskTabKeydown;
     $('scheduledTasksTab').onkeydown = taskTabKeydown;
     $('cancelTasksBtn').onclick = cancelSelectedTasks;
+    $('cancelScheduledBtn').onclick = cancelSelectedScheduledTasks;
     renderTasks();
     renderScheduledTasks();
     $('actionSel').onchange = function () {
@@ -890,8 +979,10 @@
         $('scheduleAt').value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
                               + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
       }
+      updateScheduleTimezone();
     }
     $('scheduleOn').onchange = updateScheduleUI;
+    $('scheduleAt').oninput = updateScheduleTimezone;
 
     // Ping the FOG server through the plugin endpoint to surface config issues early.
     api('ping').then(function (r) {

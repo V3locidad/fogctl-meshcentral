@@ -74,6 +74,7 @@ The plugin runs entirely server-side for the FOG calls. The browser only talks t
 | `snapinList` | `GET /fog/snapin`                                              |
 | `snapinRun`  | `POST /fog/host/{id}/task` with `taskTypeID: 13` and `deploySnapins: <selected snapin ID>` |
 | `scheduledTasks` | `GET /fog/scheduledtask/active`, returning a display-only task summary |
+| `cancelScheduled` | Read the selected schedule, `DELETE /fog/scheduledtask/{id}`, then verify it returns 404 |
 | `tasks`      | `GET /fog/task/active`                                         |
 | `cancel`     | `DELETE /fog/task/{id}/cancel`                                 |
 
@@ -81,13 +82,17 @@ Authentication uses the standard FOG headers `fog-api-token` (system) and `fog-u
 
 Scheduled snapin runs use `POST /fog/scheduledtask/create` with `taskTypeID: 13`, `isGroupTask: 0`, and `other2: <selected snapin ID>`. FOG 1.5.x's scheduler reads the snapin ID from `other2` and the WoL option from `other4`; the immediate-task fields `deploySnapins` and `wol` are not stored by that endpoint. See the [FOG scheduler source](https://github.com/FOGProject/fogproject/blob/1.5.10/packages/web/lib/service/taskscheduler.class.php#L238-L249).
 
-### Scheduled tasks (0.0.37)
+### Scheduled tasks
 
 The date/time picker uses the administrator's browser timezone. The browser sends `scheduleTime` as Unix seconds, so MeshCentral's timezone cannot shift the requested time. The server rejects invalid or past timestamps before contacting FOG. API callers may alternatively supply `scheduledFor` as an ISO timestamp with an explicit timezone (for example `2030-01-15T10:30:00+01:00`). A date without a timezone is rejected; reload the plugin panel after updating from 0.0.36.
 
 A scheduled operation counts as successful only when FOG returns a task ID and `GET /fog/scheduledtask/{id}` confirms the active task, host, type, timestamp and options. Logs and History show the confirmed task ID for each host, or the verification error. A failed verification never retries creation automatically, because the original task may already exist.
 
-In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Refresh** button. A successful scheduled submission opens this tab. Recurring tasks show their cron expression and FOG's next-run time explicitly labeled as server time. Read errors keep the last loaded list visible with a warning. Scheduled tasks are displayed read-only; **Cancel selected** remains exclusive to the active-tasks tab.
+In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Refresh** button. A successful scheduled submission opens this tab. Read errors keep the last loaded list visible with a warning.
+
+Since **0.0.39**, the **Heure FOG** column shows FOG's `runtime` text unchanged, matching the FOG management page. **Heure locale** shows the same single-run timestamp in the browser timezone, with the zone and UTC offset for that date. For example, 10:45 in Europe/Paris on October 13, 2026 is 08:45 UTC; this is the same instant, not a two-hour execution delay. The picker and confirmation/log message also identify the browser timezone. No manual offset is added to the scheduled timestamp. Recurring schedules show their cron expression and next run in FOG time; local time is unavailable because FOG does not provide an absolute next-run timestamp.
+
+Select individual scheduled tasks or use the header checkbox, then click **Annuler la sélection**. After confirmation, the plugin deletes only those schedule IDs, verifies their absence, reports per-task failures in Logs, and refreshes the list. Selections persist across refreshes; failed cancellations remain selected while the schedule is still listed. Active and scheduled selections use separate endpoints and state. Cancelling a recurring schedule removes its recurrence. This does not stop a task that has already started; use **Tâches actives** for that task. FOG 1.5.10's generic `/cancel` route does not handle scheduled records reliably, so the plugin uses resource deletion, as the FOG scheduled-tasks page does.
 
 In FOG itself, open **Task Management → Scheduled Tasks**. A previous history entry containing `2 / 0` alone is not proof that FOG stored both schedules. Check for an existing task before repeating an unconfirmed request.
 
