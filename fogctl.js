@@ -187,6 +187,82 @@ module.exports.fogctl = function (parent) {
         res.status(code || 200).set('Content-Type', 'application/json').send(JSON.stringify(payload));
     }
 
+    // The browser supplies an absolute Unix timestamp. Parsing datetime-local
+    // on MeshCentral would reinterpret the admin's time in the server timezone.
+    function getScheduleTime(query) {
+        if (query.scheduleTime === undefined && !query.scheduledFor) return null;
+        var timestamp;
+        if (typeof query.scheduleTime === 'string' && /^\d+$/.test(query.scheduleTime)) {
+            timestamp = Number(query.scheduleTime);
+        } else if (query.scheduleTime === undefined && typeof query.scheduledFor === 'string'
+            && /(?:Z|[+-]\d{2}:\d{2})$/.test(query.scheduledFor)) {
+            timestamp = Date.parse(query.scheduledFor) / 1000;
+        } else {
+            throw new Error('Schedule needs an absolute time. Reload the FOG panel and select the date/time again.');
+        }
+        if (!Number.isSafeInteger(timestamp) || timestamp <= Math.floor(Date.now() / 1000)
+            || timestamp > 253402300799) {
+            throw new Error('Schedule must be a valid date/time in the future. Check the browser and MeshCentral clocks.');
+        }
+        return timestamp;
+    }
+
+    function createScheduledTask(hostId, taskType, timestamp, snapinId, wol, shutdown) {
+        if (timestamp <= Math.floor(Date.now() / 1000)) {
+            return Promise.reject(new Error('Scheduled time has passed; no task was created.'));
+        }
+        var body = {
+            name: 'fogctl ' + taskType + ' host ' + hostId + ' ' + new Date(timestamp * 1000).toISOString(),
+            hostID: Number(hostId), taskTypeID: taskType,
+            type: 'S', isGroupTask: 0, scheduleTime: timestamp, isActive: 1,
+            shutdown: shutdown ? 1 : 0,
+            other2: snapinId, other3: 'fogctl', other4: wol ? 1 : 0,
+            imageID: 0
+        };
+        return fogCall('POST', '/fog/scheduledtask/create', body).then(function (created) {
+            if (created.data && created.data.error) {
+                var error = created.data.error;
+                throw new Error('FOG rejected the schedule: ' + (typeof error === 'string' ? error : (error.message || 'API error')));
+            }
+            var task = created.data && (created.data.scheduledtask || created.data);
+            var id = Number(task && task.id);
+            if (!Number.isSafeInteger(id) || id <= 0) {
+                throw new Error('FOG did not return a scheduled task ID. Creation is unconfirmed; check FOG Scheduled Tasks before retrying.');
+            }
+            // A 2xx response alone does not prove that FOG stored the task.
+            // Read it back without retrying POST (which could create duplicates).
+            return fogCall('GET', '/fog/scheduledtask/' + id).then(function (saved) {
+                var task = saved.data && (saved.data.scheduledtask || saved.data);
+                if (task && Number(task.isActive) === 0) {
+                    throw new Error('FOG already marks this task inactive. Check the FOG server clock and task execution history.');
+                }
+                if (!task || Number(task.id) !== id || Number(task.hostID) !== Number(hostId)
+                    || Number(task.taskTypeID) !== taskType || task.type !== 'S'
+                    || Number(task.isGroupTask) !== 0 || Number(task.isActive) !== 1
+                    || Number(task.scheduleTime) !== timestamp || Number(task.other2) !== snapinId
+                    || Number(task.other4) !== body.other4 || Number(task.shutdown) !== body.shutdown) {
+                    throw new Error('FOG did not confirm the expected active schedule, host and task settings.');
+                }
+                saved.scheduledTaskId = id;
+                return saved;
+            }).catch(function (error) {
+                throw new Error('Scheduled task #' + id + ' was returned by FOG but verification failed: '
+                    + error.message + ' Check FOG Scheduled Tasks before retrying.');
+            });
+        });
+    }
+
+    function historyResults(results) {
+        var summary = {};
+        Object.keys(results).forEach(function (hostId) {
+            var result = results[hostId];
+            summary[hostId] = { ok: result.ok };
+            if (result.scheduledTaskId) summary[hostId].scheduledTaskId = result.scheduledTaskId;
+            if (result.error) summary[hostId].error = result.error;
+        });
+        return summary;
+    }
+
     obj.handleAdminReq = function (req, res, user) {
         var action = req.query && req.query.action;
 
@@ -234,7 +310,7 @@ module.exports.fogctl = function (parent) {
         // -------- deploy: task type 1 on a list of FOG host ids --------
         // -------- capture: same but task type 2 --------
         // Optional `imageId` overrides the host's assigned image (deploy only).
-        // Optional `scheduledFor` (YYYY-MM-DD HH:MM, FOG server local time) turns
+        // Optional `scheduleTime` (Unix seconds from the browser) turns
         // the immediate task into a single-shot scheduled task via /fog/scheduledtask.
         if (action === 'deploy' || action === 'capture') {
             var taskType = (action === 'deploy') ? 1 : 2;
@@ -242,6 +318,9 @@ module.exports.fogctl = function (parent) {
             if (!ids.length) return sendJson(res, 400, { error: 'no host ids' });
             var overrideImg = (action === 'deploy' && req.query.imageId) ? req.query.imageId : null;
             var scheduledFor = req.query.scheduledFor || null;
+            var scheduleTime;
+            try { scheduleTime = getScheduleTime(req.query); }
+            catch (e) { return sendJson(res, 400, { error: e.message }); }
             var wantWol = req.query.wol === '1';
             var wantShutdown = req.query.shutdown === '1';
             var out = {};
@@ -257,21 +336,11 @@ module.exports.fogctl = function (parent) {
             }
             function postTask(id) {
                 var endpoint, body;
-                if (scheduledFor) {
-                    var ts = Math.floor(Date.parse(scheduledFor.replace(' ', 'T')) / 1000);
-                    endpoint = '/fog/scheduledtask/create';
-                    body = {
-                        name: 'fogctl ' + action + ' ' + scheduledFor,
-                        hostID: parseInt(id, 10),
-                        taskTypeID: taskType,
-                        type: 'S',
-                        scheduleTime: ts,
-                        isActive: 1
-                    };
-                } else {
-                    endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
-                    body = { taskTypeID: taskType };
+                if (scheduleTime !== null) {
+                    return createScheduledTask(id, taskType, scheduleTime, 0, wantWol, wantShutdown);
                 }
+                endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
+                body = { taskTypeID: taskType };
                 if (wantWol) body.wol = true;
                 if (wantShutdown) body.shutdown = true;
                 return fogCall('POST', endpoint, body);
@@ -287,6 +356,8 @@ module.exports.fogctl = function (parent) {
                         hostIds: ids,
                         ok: ok, ko: ko,
                         scheduledFor: scheduledFor || null,
+                        scheduleTime: scheduleTime,
+                        results: historyResults(out),
                         overrideImg: overrideImg || null,
                         wol: wantWol, shutdown: wantShutdown,
                     });
@@ -316,7 +387,7 @@ module.exports.fogctl = function (parent) {
                             });
                     });
                 });
-                p.then(function (r) { out[id] = { ok: true, data: r.data }; step(); })
+                p.then(function (r) { out[id] = { ok: true, data: r.data, scheduledTaskId: r.scheduledTaskId }; step(); })
                  .catch(function (e) { out[id] = { ok: false, error: e.message }; step(); });
             }
             return step();
@@ -423,7 +494,7 @@ module.exports.fogctl = function (parent) {
 
         // -------- snapinRun: trigger a Single Snapin task (type 13) per host.
         // Pass the selected ID directly; do not change host snapin associations.
-        // Optional `scheduledFor` turns it into a single-shot scheduled task.
+        // Optional `scheduleTime` turns it into a single-shot scheduled task.
         if (action === 'snapinRun') {
             var snapinId = req.query.snapinId;
             var ids2 = (req.query.hostIds || '').split(',').filter(Boolean);
@@ -437,32 +508,20 @@ module.exports.fogctl = function (parent) {
             }
             var selectedSnapinId = Number(snapinId);
             if (!ids2.length) return sendJson(res, 400, { error: 'no host ids' });
+            var snapinScheduleTime;
+            try { snapinScheduleTime = getScheduleTime(req.query); }
+            catch (e) { return sendJson(res, 400, { error: e.message }); }
             var out2 = {};
             var qq2 = ids2.slice();
             function runSingleSnapin(hostId) {
                 var b;
                 var ep;
-                if (snapinSchedFor) {
-                    var ts = Math.floor(Date.parse(snapinSchedFor.replace(' ', 'T')) / 1000);
-                    ep = '/fog/scheduledtask/create';
-                    b = {
-                        name: 'fogctl snapin ' + snapinSchedFor,
-                        hostID: parseInt(hostId, 10),
-                        taskTypeID: 13,
-                        type: 'S',
-                        isGroupTask: 0,
-                        // FOG 1.5.x scheduler reads the snapin ID from other2.
-                        other2: selectedSnapinId,
-                        scheduleTime: ts,
-                        isActive: 1
-                    };
-                    // ScheduledTask stores WoL in other4, not wol.
-                    if (snapinWol) b.other4 = 1;
-                } else {
-                    ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
-                    b = { taskTypeID: 13, deploySnapins: selectedSnapinId };
-                    if (snapinWol) b.wol = true;
+                if (snapinScheduleTime !== null) {
+                    return createScheduledTask(hostId, 13, snapinScheduleTime, selectedSnapinId, snapinWol, snapinShutdown);
                 }
+                ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
+                b = { taskTypeID: 13, deploySnapins: selectedSnapinId };
+                if (snapinWol) b.wol = true;
                 if (snapinShutdown) b.shutdown = true;
                 return fogCall('POST', ep, b);
             }
@@ -477,13 +536,15 @@ module.exports.fogctl = function (parent) {
                         snapinId: snapinId,
                         ok: okS, ko: koS,
                         scheduledFor: snapinSchedFor || null,
+                        scheduleTime: snapinScheduleTime,
+                        results: historyResults(out2),
                         wol: snapinWol, shutdown: snapinShutdown,
                     });
                     return sendJson(res, 200, { ok: true, results: out2 });
                 }
                 var hid = qq2.shift();
                 runSingleSnapin(hid)
-                    .then(function (r) { out2[hid] = { ok: true, data: r.data }; stepS(); })
+                    .then(function (r) { out2[hid] = { ok: true, data: r.data, scheduledTaskId: r.scheduledTaskId }; stepS(); })
                     .catch(function (e) { out2[hid] = { ok: false, error: e.message }; stepS(); });
             }
             return stepS();

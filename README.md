@@ -79,11 +79,19 @@ Authentication uses the standard FOG headers `fog-api-token` (system) and `fog-u
 
 Scheduled snapin runs use `POST /fog/scheduledtask/create` with `taskTypeID: 13`, `isGroupTask: 0`, and `other2: <selected snapin ID>`. FOG 1.5.x's scheduler reads the snapin ID from `other2` and the WoL option from `other4`; the immediate-task fields `deploySnapins` and `wol` are not stored by that endpoint. See the [FOG scheduler source](https://github.com/FOGProject/fogproject/blob/1.5.10/packages/web/lib/service/taskscheduler.class.php#L238-L249).
 
+### Scheduled tasks (0.0.37)
+
+The date/time picker uses the administrator's browser timezone. The browser sends `scheduleTime` as Unix seconds, so MeshCentral's timezone cannot shift the requested time. The server rejects invalid or past timestamps before contacting FOG. API callers may alternatively supply `scheduledFor` as an ISO timestamp with an explicit timezone (for example `2030-01-15T10:30:00+01:00`). A date without a timezone is rejected; reload the plugin panel after updating from 0.0.36.
+
+A scheduled operation counts as successful only when FOG returns a task ID and `GET /fog/scheduledtask/{id}` confirms the active task, host, type, timestamp and options. Logs and History show the confirmed task ID for each host, or the verification error. A failed verification never retries creation automatically, because the original task may already exist.
+
+In FOG, open **Task Management → Scheduled Tasks** to see pending schedules. The plugin's **Active FOG tasks** panel shows tasks queued/running for execution, not future schedules. A previous history entry containing `2 / 0` alone is not proof that FOG stored both schedules. Check for an existing task before repeating an unconfirmed request.
+
 Existing host associations and previously queued tasks are not changed by this fix. FOG may combine a new single-snapin request with snapin tasks already pending on that host; it does not enqueue all associated snapins merely because another task exists.
 
 ## Tests
 
-With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server.
+With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server. Run with `TZ=UTC` and `TZ=Europe/Paris` to verify timestamp handling across server timezones. Coverage includes browser serialization, scheduled deploy/capture/snapin tasks, read-back failures, invalid dates and the immediate Single Snapin behavior.
 
 ## Troubleshooting
 

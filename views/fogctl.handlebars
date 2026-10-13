@@ -573,7 +573,13 @@
               + '</tr></thead><tbody>';
         entries.forEach(function (e) {
           var opts = [];
-          if (e.scheduledFor) opts.push('sched=' + e.scheduledFor);
+          if (e.scheduleTime) opts.push('sched=' + new Date(e.scheduleTime * 1000).toLocaleString());
+          else if (e.scheduledFor) opts.push('sched=' + e.scheduledFor);
+          Object.keys(e.results || {}).forEach(function (hostId) {
+            var result = e.results[hostId];
+            if (result.scheduledTaskId) opts.push(hostId + ': scheduled #' + result.scheduledTaskId);
+            if (result.error) opts.push(hostId + ': ' + result.error);
+          });
           if (e.overrideImg) opts.push('img=' + e.overrideImg);
           if (e.snapinId) opts.push('snapin=' + e.snapinId);
           if (e.wol) opts.push('wol');
@@ -583,7 +589,7 @@
                 + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.kind || '?') + '</td>'
                 + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.hostIds || []).length + '</td>'
                 + '<td style="padding:4px;border-bottom:1px solid #333"><span style="color:#3c3">' + (e.ok||0) + '</span> / <span style="color:#f44">' + (e.ko||0) + '</span></td>'
-                + '<td style="padding:4px;border-bottom:1px solid #333">' + opts.join(' ') + '</td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333">' + escapeHtml(opts.join(' ')) + '</td>'
                 + '</tr>';
         });
         html += '</tbody></table>';
@@ -643,9 +649,8 @@
         extra.snapinId = sid;
       }
 
-      // Scheduled run? The datetime-local field gives us "YYYY-MM-DDTHH:MM" in
-      // the user's local timezone — FOG schedules in server-local time so this
-      // assumes the MeshCentral admin and the FOG server share a clock.
+      // Interpret datetime-local in the browser's timezone, then send Unix
+      // seconds so MeshCentral and FOG cannot reinterpret the selected hour.
       if ($('scheduleOn').checked) {
         var ts = $('scheduleAt').value;
         if (!ts) { alert('Pick a date/time.'); return; }
@@ -653,6 +658,7 @@
         if (isNaN(when.getTime())) { alert('Invalid date/time.'); return; }
         if (when.getTime() < Date.now() + 30000) { alert('Pick a date in the future.'); return; }
         extra.scheduledFor = ts.replace('T', ' ');
+        extra.scheduleTime = String(Math.floor(when.getTime() / 1000));
       }
 
       // Per-task flags
@@ -690,11 +696,17 @@
         if (r && r.results) {
           var ok = 0, ko = 0, errs = [];
           Object.keys(r.results).forEach(function (hid) {
-            if (r.results[hid].ok) ok++;
+            if (r.results[hid].ok) {
+              ok++;
+              if (r.results[hid].scheduledTaskId) {
+                log('FOG scheduled task #' + r.results[hid].scheduledTaskId + ' for host ' + hid);
+              }
+            }
             else { ko++; errs.push(hid + ': ' + r.results[hid].error); }
           });
           $('progress').textContent = ok + '/' + hostIds.length + (ko ? ' (' + ko + ' failed)' : '');
           log('Done. ' + ok + ' ok, ' + ko + ' failed.');
+          if (extra.scheduleTime && ok) log('View in FOG: Task Management > Scheduled Tasks.');
           errs.slice(0, 10).forEach(function (e) { log('  ' + e); });
         } else if (r && r.error) {
           log('Error: ' + r.error);
