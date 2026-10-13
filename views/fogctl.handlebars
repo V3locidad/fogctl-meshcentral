@@ -122,7 +122,7 @@
     <div id="scheduledMessage" role="status" aria-live="polite"></div>
     <div id="scheduledTableWrap">
       <table id="scheduledTable">
-        <thead><tr><th><input type="checkbox" id="scheduledCheckAll" aria-label="Sélectionner toutes les tâches planifiées"></th><th>Poste / groupe</th><th>Type / snapin</th><th>Heure FOG</th><th>Heure locale</th><th>État</th><th>ID FOG</th></tr></thead>
+        <thead><tr><th><input type="checkbox" id="scheduledCheckAll" aria-label="Sélectionner toutes les tâches planifiées"></th><th>Poste / groupe</th><th>Type / snapin</th><th>Date prévue (heure FOG)</th><th>État</th><th>ID FOG</th></tr></thead>
         <tbody id="scheduledBody"></tbody>
       </table>
     </div>
@@ -166,7 +166,10 @@
     scheduledLoading: false,
     scheduledError: '',
     checkedScheduledTasks: {},
-    cancellingScheduled: false
+    cancellingScheduled: false,
+    fogTimezone: null,
+    fogClockOffset: 0,
+    scheduleInfoError: ''
   };
 
   function $(id) { return document.getElementById(id); }
@@ -468,18 +471,41 @@
     }
   }
 
-  function localTimeZone(date) {
-    var zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'heure locale';
-    var offset = -date.getTimezoneOffset();
-    if (!Number.isFinite(offset)) return zone;
-    var pad = function (n) { return ('0' + n).slice(-2); };
-    return zone + ' (UTC' + (offset >= 0 ? '+' : '−') + pad(Math.floor(Math.abs(offset) / 60)) + ':' + pad(Math.abs(offset) % 60) + ')';
+  function fogDateInput(timestamp, zone) {
+    var parts = {};
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).formatToParts(new Date(timestamp)).forEach(function (p) { parts[p.type] = p.value; });
+    return parts.year + '-' + parts.month + '-' + parts.day + 'T' + parts.hour + ':' + parts.minute;
   }
 
   function updateScheduleTimezone() {
-    var date = $('scheduleAt').value ? new Date($('scheduleAt').value) : new Date();
-    $('scheduleTimezone').hidden = !$('scheduleOn').checked;
-    $('scheduleTimezone').textContent = 'Heure locale : ' + localTimeZone(date);
+    var on = $('scheduleOn').checked;
+    $('scheduleTimezone').hidden = !on;
+    $('scheduleTimezone').textContent = state.fogTimezone ? 'Heure FOG : ' + state.fogTimezone : (state.scheduleInfoError || 'Chargement du fuseau FOG…');
+    $('scheduleAt').disabled = !on || !state.fogTimezone;
+    $('scheduleAt').style.opacity = $('scheduleAt').disabled ? '0.5' : '1';
+    if (on && state.fogTimezone && !$('scheduleAt').value) {
+      var next = Math.ceil((Date.now() + state.fogClockOffset + 3600000) / 900000) * 900000;
+      $('scheduleAt').value = fogDateInput(next, state.fogTimezone);
+    }
+  }
+
+  function loadScheduleInfo() {
+    return api('scheduleInfo').then(function (r) {
+      if (!r || r.error || !r.timezone || !Number.isFinite(r.now)) throw new Error(r && r.error || 'Fuseau FOG indisponible');
+      fogDateInput(r.now, r.timezone); // Validate timezone support before enabling scheduling.
+      state.fogTimezone = r.timezone;
+      state.fogClockOffset = r.now - Date.now();
+      state.scheduleInfoError = '';
+      updateScheduleTimezone();
+    }).catch(function (e) {
+      state.fogTimezone = null;
+      state.scheduleInfoError = e.message;
+      updateScheduleTimezone();
+      log('Planification indisponible : ' + e.message);
+    });
   }
 
   function updateScheduledSelection() {
@@ -502,7 +528,7 @@
     message.className = state.scheduledError ? 'error' : '';
     message.textContent = state.scheduledError
       ? 'Actualisation impossible : ' + state.scheduledError + (state.scheduledLoaded ? ' — Dernières données conservées.' : '')
-      : (state.scheduledLoading ? 'Chargement…' : 'Heure FOG : affichage du serveur. Heure locale : fuseau du navigateur. Un écart de fuseau ne change pas l’instant d’exécution.');
+      : (state.scheduledLoading ? 'Chargement…' : 'Dates et heures FOG, comme dans le champ Schedule.');
     var rows = state.scheduledList.map(function (t) {
       var target = t.targetName || ((t.isGroup ? 'Groupe #' : 'Poste #') + t.targetId);
       if (t.isGroup && t.targetName) target = 'Groupe : ' + target;
@@ -511,15 +537,11 @@
         var snapin = state.snapins.find(function (s) { return String(s.id) === String(t.snapinId); });
         details = '<small class="scheduled-details">' + escapeHtml(snapin ? snapin.name : ('Snapin #' + t.snapinId)) + '</small>';
       }
-      var localDate = '—', status;
+      var status;
       if (t.scheduleType === 'C') {
         status = 'Récurrente';
         details += '<small class="scheduled-details">Cron : ' + escapeHtml(t.cron) + '</small>';
       } else {
-        if (t.scheduleTime) {
-          var date = new Date(t.scheduleTime * 1000);
-          localDate = escapeHtml(date.toLocaleString()) + '<small class="scheduled-details">' + escapeHtml(localTimeZone(date)) + '</small>';
-        }
         status = t.scheduleTime && t.scheduleTime * 1000 <= Date.now() ? 'Échéance atteinte' : 'En attente';
       }
       var checked = state.checkedScheduledTasks[t.taskId] ? ' checked' : '';
@@ -529,12 +551,11 @@
         + '<td>' + escapeHtml(target) + '</td>'
         + '<td>' + escapeHtml(t.label) + details + '</td>'
         + '<td class="schedule-date">' + escapeHtml(t.runtime || 'Date indisponible') + '</td>'
-        + '<td class="schedule-date">' + localDate + '</td>'
         + '<td>' + escapeHtml(status) + '</td>'
         + '<td>#' + escapeHtml(t.taskId) + '</td></tr>';
     }).join('');
     var empty = state.scheduledError ? 'Liste indisponible.' : (state.scheduledLoaded ? 'Aucune tâche planifiée en attente.' : 'Chargement…');
-    $('scheduledBody').innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:#888;padding:10px">' + empty + '</td></tr>';
+    $('scheduledBody').innerHTML = rows || '<tr><td colspan="6" style="text-align:center;color:#888;padding:10px">' + empty + '</td></tr>';
     [].slice.call($('scheduledBody').querySelectorAll('input[data-scheduled-id]')).forEach(function (cb) {
       cb.onchange = function () {
         var id = cb.getAttribute('data-scheduled-id');
@@ -768,7 +789,8 @@
               + '</tr></thead><tbody>';
         entries.forEach(function (e) {
           var opts = [];
-          if (e.scheduleTime) opts.push('sched=' + new Date(e.scheduleTime * 1000).toLocaleString());
+          if (e.scheduleTimezone && e.scheduledFor) opts.push('sched=' + e.scheduledFor + ' FOG (' + e.scheduleTimezone + ')');
+          else if (e.scheduleTime) opts.push('sched=' + new Date(e.scheduleTime * 1000).toLocaleString());
           else if (e.scheduledFor) opts.push('sched=' + e.scheduledFor);
           Object.keys(e.results || {}).forEach(function (hostId) {
             var result = e.results[hostId];
@@ -800,6 +822,10 @@
     var action = $('actionSel').value;
     var ids = selectedNodeIds();
     if (!ids.length) { alert('No computer selected.'); return; }
+    if ($('scheduleOn').checked && (!state.fogTimezone || !$('scheduleAt').value)) {
+      alert(state.scheduleInfoError || 'Choisissez une date et une heure FOG.');
+      return;
+    }
 
     // Make sure we know the FOG host id for each selected node.
     var missing = ids.filter(function (id) { return state.fogMap[id] === undefined; });
@@ -820,7 +846,7 @@
       var flags = [];
       if ($('optWol').checked) flags.push('WoL');
       if ($('optShutdown').checked) flags.push('shutdown after');
-      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ') + ' ' + localTimeZone(new Date($('scheduleAt').value))) : '';
+      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ') + ' — heure FOG (' + state.fogTimezone + ')') : '';
       var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
               + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '')
               + when
@@ -844,16 +870,13 @@
         extra.snapinId = sid;
       }
 
-      // Interpret datetime-local in the browser's timezone, then send Unix
-      // seconds so MeshCentral and FOG cannot reinterpret the selected hour.
+      // Send the selected clock reading unchanged. The server converts it in
+      // the configured FOG timezone and checks FOG's returned runtime.
       if ($('scheduleOn').checked) {
         var ts = $('scheduleAt').value;
-        if (!ts) { alert('Pick a date/time.'); return; }
-        var when = new Date(ts);
-        if (isNaN(when.getTime())) { alert('Invalid date/time.'); return; }
-        if (when.getTime() < Date.now() + 30000) { alert('Pick a date in the future.'); return; }
         extra.scheduledFor = ts.replace('T', ' ');
-        extra.scheduleTime = String(Math.floor(when.getTime() / 1000));
+        extra.scheduleMode = 'fog';
+        extra.scheduleTimezone = state.fogTimezone;
       }
 
       // Per-task flags
@@ -901,7 +924,7 @@
           });
           $('progress').textContent = ok + '/' + hostIds.length + (ko ? ' (' + ko + ' failed)' : '');
           log('Done. ' + ok + ' ok, ' + ko + ' failed.');
-          if (extra.scheduleTime && ok) {
+          if (extra.scheduleMode === 'fog' && ok) {
             log('Les tâches sont visibles dans l’onglet Tâches planifiées.');
             selectTaskTab('scheduled');
           }
@@ -969,20 +992,12 @@
     // 15 minutes — typical for "schedule for tonight" workflows.
     function updateScheduleUI() {
       var on = $('scheduleOn').checked;
-      $('scheduleAt').disabled = !on;
-      $('scheduleAt').style.opacity = on ? '1' : '0.5';
       $('runBtn').textContent = on ? 'Schedule on selected' : 'Run on selected';
-      if (on && !$('scheduleAt').value) {
-        var d = new Date(Date.now() + 3600 * 1000);
-        d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0);
-        var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
-        $('scheduleAt').value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
-                              + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      }
       updateScheduleTimezone();
     }
     $('scheduleOn').onchange = updateScheduleUI;
     $('scheduleAt').oninput = updateScheduleTimezone;
+    loadScheduleInfo();
 
     // Ping the FOG server through the plugin endpoint to surface config issues early.
     api('ping').then(function (r) {

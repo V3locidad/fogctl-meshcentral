@@ -74,6 +74,7 @@ The plugin runs entirely server-side for the FOG calls. The browser only talks t
 | `snapinList` | `GET /fog/snapin`                                              |
 | `snapinRun`  | `POST /fog/host/{id}/task` with `taskTypeID: 13` and `deploySnapins: <selected snapin ID>` |
 | `scheduledTasks` | `GET /fog/scheduledtask/active`, returning a display-only task summary |
+| `scheduleInfo` | Return the plugin's configured FOG timezone and current clock reading, without credentials |
 | `cancelScheduled` | Read the selected schedule, `DELETE /fog/scheduledtask/{id}`, then verify it returns 404 |
 | `tasks`      | `GET /fog/task/active`                                         |
 | `cancel`     | `DELETE /fog/task/{id}/cancel`                                 |
@@ -84,13 +85,19 @@ Scheduled snapin runs use `POST /fog/scheduledtask/create` with `taskTypeID: 13`
 
 ### Scheduled tasks
 
-The date/time picker uses the administrator's browser timezone. The browser sends `scheduleTime` as Unix seconds, so MeshCentral's timezone cannot shift the requested time. The server rejects invalid or past timestamps before contacting FOG. API callers may alternatively supply `scheduledFor` as an ISO timestamp with an explicit timezone (for example `2030-01-15T10:30:00+01:00`). A date without a timezone is rejected; reload the plugin panel after updating from 0.0.36.
+Since **0.0.40**, **Schedule uses the FOG clock**: selecting October 13 at 11:00 requests October 13 at 11:00 in FOG, regardless of the browser or MeshCentral timezone. The browser sends the clock reading unchanged with `scheduleMode=fog`; the server converts it to Unix seconds in `fogTimezone`. The picker, confirmation, Logs, History and scheduled-task list all identify FOG time. The old browser-local conversion from 0.0.37–0.0.39 no longer applies to the UI; reload the panel after updating.
+
+`fogTimezone` is an optional IANA timezone in `fog-config.json`, defaulting to `UTC` (FOG's default and the server shown in the reported screenshots). It **must match FOG Configuration → FOG Settings → FOG_TZ_INFO**. For a FOG server configured for Paris, add `"fogTimezone": "Europe/Paris"`. The API does not expose that setting in FOG 1.5.10, so the plugin does not claim to discover it automatically or change FOG's timezone. The selected date determines the summer/winter offset; invalid dates, past times, and nonexistent or ambiguous DST clock readings are rejected before task creation.
+
+After creation, the plugin checks that FOG's returned `runtime` equals the requested date and time. If it differs (for example because `fogTimezone` does not match FOG), the plugin attempts to remove the new schedule and verifies removal. It reports failure with the task ID if removal cannot be confirmed. Existing schedules are unchanged; cancel and recreate an older schedule to change its time.
+
+Existing API integrations may still deliberately send an absolute `scheduleTime` in Unix seconds or `scheduledFor` as an ISO timestamp with an explicit offset. Those requests retain their absolute-time semantics. Do not combine an absolute timestamp with `scheduleMode=fog`.
 
 A scheduled operation counts as successful only when FOG returns a task ID and `GET /fog/scheduledtask/{id}` confirms the active task, host, type, timestamp and options. Logs and History show the confirmed task ID for each host, or the verification error. A failed verification never retries creation automatically, because the original task may already exist.
 
 In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Refresh** button. A successful scheduled submission opens this tab. Read errors keep the last loaded list visible with a warning.
 
-Since **0.0.39**, the **Heure FOG** column shows FOG's `runtime` text unchanged, matching the FOG management page. **Heure locale** shows the same single-run timestamp in the browser timezone, with the zone and UTC offset for that date. For example, 10:45 in Europe/Paris on October 13, 2026 is 08:45 UTC; this is the same instant, not a two-hour execution delay. The picker and confirmation/log message also identify the browser timezone. No manual offset is added to the scheduled timestamp. Recurring schedules show their cron expression and next run in FOG time; local time is unavailable because FOG does not provide an absolute next-run timestamp.
+The **Date prévue (heure FOG)** column shows FOG's `runtime` text unchanged, matching the FOG management page and the scheduling picker. Recurring schedules show their cron expression and next run in FOG time.
 
 Select individual scheduled tasks or use the header checkbox, then click **Annuler la sélection**. After confirmation, the plugin deletes only those schedule IDs, verifies their absence, reports per-task failures in Logs, and refreshes the list. Selections persist across refreshes; failed cancellations remain selected while the schedule is still listed. Active and scheduled selections use separate endpoints and state. Cancelling a recurring schedule removes its recurrence. This does not stop a task that has already started; use **Tâches actives** for that task. FOG 1.5.10's generic `/cancel` route does not handle scheduled records reliably, so the plugin uses resource deletion, as the FOG scheduled-tasks page does.
 
@@ -100,7 +107,7 @@ Existing host associations and previously queued tasks are not changed by this f
 
 ## Tests
 
-With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server. Run with `TZ=UTC` and `TZ=Europe/Paris` to verify timestamp handling across server timezones. Coverage includes browser serialization, scheduled deploy/capture/snapin tasks, read-back failures, invalid dates and the immediate Single Snapin behavior.
+With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server. Run with `TZ=UTC` and `TZ=Europe/Paris` to verify independence from browser/server timezones. Coverage includes 11:00 input becoming 11:00 in FOG for deploy/capture/snapin, DST transitions, midnight/year boundaries, read-back and rollback failures, cancellation, invalid dates and the immediate Single Snapin behavior.
 
 ## Troubleshooting
 

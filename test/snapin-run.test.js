@@ -7,7 +7,7 @@ const { test } = require('node:test');
 
 // Exercise the public plugin handler against a local FOG API stub. Config and
 // history stay in memory; these tests never read real credentials or task hosts.
-async function harness(t, respond) {
+async function harness(t, respond, configOverrides = {}) {
     const requests = [];
     const scheduledTasks = new Map();
     const server = http.createServer((req, res) => {
@@ -19,6 +19,9 @@ async function harness(t, respond) {
             function defaultReply() {
                 if (request.method === 'POST' && request.path === '/fog/scheduledtask/create') {
                     const task = { ...request.body, id: String(700 + scheduledTasks.size) };
+                    task.runtime = new Date(task.scheduleTime * 1000).toLocaleString('sv-SE', {
+                        timeZone: configOverrides.fogTimezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                    });
                     scheduledTasks.set(task.id, task);
                     return { status: 200, data: task };
                 }
@@ -45,7 +48,7 @@ async function harness(t, respond) {
     const root = path.resolve(__dirname, '..');
     const files = new Map([[path.join(root, 'fog-config.json'), JSON.stringify({
         fogUrl: 'http://127.0.0.1:' + server.address().port,
-        apiToken: 'test-api-token', userToken: 'test-user-token'
+        apiToken: 'test-api-token', userToken: 'test-user-token', ...configOverrides
     })]]);
     const fakeFs = {
         readFileSync(file) {
@@ -253,18 +256,18 @@ test('stored host, type, time, active state and snapin must match the request', 
     }
 });
 
-test('the browser sends Unix seconds for the selected local time and logs the verified task ID', { timeout: 5000 }, async () => {
+test('the browser sends the selected FOG clock reading unchanged and logs its timezone', { timeout: 5000 }, async () => {
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
     const runAction = source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
     const controls = {
         actionSel: { value: 'snapin' }, snapinSel: { value: '42' },
-        scheduleOn: { checked: true }, scheduleAt: { value: '2030-01-15T10:30' },
+        scheduleOn: { checked: true }, scheduleAt: { value: '2030-10-13T11:00' },
         optWol: {}, optShutdown: {}, optJoinAd: {}, optForceName: {}, progress: {}
     };
     const calls = [], logs = [], tabs = [];
     const sandbox = {
         $: id => controls[id], selectedNodeIds: () => ['node1'],
-        state: { fogMap: { node1: { id: '1038' } } }, confirm: () => true,
+        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC' }, confirm: () => true,
         alert: message => assert.fail(message), log: message => logs.push(message),
         selectTaskTab: tab => tabs.push(tab),
         api: (action, params) => {
@@ -272,13 +275,15 @@ test('the browser sends Unix seconds for the selected local time and logs the ve
             return Promise.resolve({ results: { '1038': { ok: true, scheduledTaskId: 700 } } });
         }
     };
-    const timeHelper = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function updateScheduleTimezone('));
-    vm.runInNewContext(timeHelper + runAction + '\nrunAction();', sandbox);
+    vm.runInNewContext(runAction + '\nrunAction();', sandbox);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].params.scheduleTime, String(new Date('2030-01-15T10:30').getTime() / 1000));
+    assert.equal(calls[0].params.scheduledFor, '2030-10-13 11:00');
+    assert.equal(calls[0].params.scheduleMode, 'fog');
+    assert.equal(calls[0].params.scheduleTimezone, 'UTC');
+    assert.equal(calls[0].params.scheduleTime, undefined);
     assert.ok(logs.some(message => message.includes('scheduled task #700')));
-    assert.ok(logs.some(message => message.includes('UTC')));
+    assert.ok(logs.some(message => message.includes('2030-10-13 11:00 — heure FOG (UTC)')));
     assert.deepEqual(tabs, ['scheduled']);
 });
 
@@ -321,18 +326,20 @@ test('scheduledTasks distinguishes an empty list from API errors and invalid dat
 
 function scheduledTabHarness() {
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const code = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function showTasks(v) {'));
+    const code = source.slice(source.indexOf('  function fogDateInput('), source.indexOf('  function showTasks(v) {'));
     const elements = {};
     const state = {
         taskTab: 'active', scheduledList: [], snapins: [], scheduledLoaded: false,
         scheduledLoading: false, scheduledError: '', checkedTasks: { '99': true },
-        checkedScheduledTasks: {}, cancellingScheduled: false
+        checkedScheduledTasks: {}, cancellingScheduled: false,
+        fogTimezone: null, fogClockOffset: 0, scheduleInfoError: ''
     };
     const calls = [], params = [], logs = [], alerts = [];
     let reply = { tasks: [] };
     const sandbox = {
         state,
         $: id => elements[id] || (elements[id] = {
+            style: {},
             setAttribute(key, value) { this[key] = value; }, focus() { this.focused = true; },
             querySelectorAll() {
                 this.boxes = Array.from((this.innerHTML || '').matchAll(/<input[^>]+data-scheduled-id="([^"]+)"[^>]*>/g), match => ({
@@ -364,8 +371,7 @@ test('scheduled tab renders target, snapin and recurrence safely and preserves r
     assert.ok(html.includes('Groupe : Room A'));
     assert.ok(html.includes('2030-01-16 07:00'));
     assert.ok(html.includes('2030-01-15 09:30'));
-    assert.ok(html.includes(new Date(1894699800000).toLocaleString()));
-    assert.ok(html.includes(h.sandbox.localTimeZone(new Date(1894699800000))));
+    assert.ok(!html.includes('Europe/Paris'));
     assert.ok(html.includes('0 7 * * 1-5'));
     assert.ok(html.includes('#8'));
     h.reply({ error: 'FOG unavailable' });
@@ -515,25 +521,135 @@ test('declining confirmation or a failed request never clears scheduled selectio
     assert.equal(h.state.cancellingScheduled, false);
 });
 
-test('timezone labels follow the selected date, including Paris summer and winter offsets', () => {
-    const { execFileSync } = require('node:child_process');
+test('picker default and label use FOG timezone independently of the browser timezone', async () => {
+    const h = scheduledTabHarness();
+    h.sandbox.$('scheduleOn').checked = true;
+    h.sandbox.$('scheduleAt').value = '';
+    h.sandbox.updateScheduleTimezone();
+    assert.equal(h.elements.scheduleAt.disabled, true);
+    h.reply({ timezone: 'UTC', now: Date.parse('2030-10-13T09:05:00Z') });
+    await h.sandbox.loadScheduleInfo();
+    assert.equal(h.elements.scheduleTimezone.textContent, 'Heure FOG : UTC');
+    assert.equal(h.elements.scheduleAt.disabled, false);
+    assert.equal(h.elements.scheduleAt.value, '2030-10-13T10:15');
+    h.elements.scheduleAt.value = '2030-10-13T11:00';
+    h.sandbox.updateScheduleTimezone();
+    assert.equal(h.elements.scheduleAt.value, '2030-10-13T11:00');
+    assert.equal(h.sandbox.fogDateInput(Date.parse('2030-07-15T09:00:00Z'), 'Europe/Paris'), '2030-07-15T11:00');
+    assert.equal(h.sandbox.fogDateInput(Date.parse('2030-01-15T10:00:00Z'), 'Europe/Paris'), '2030-01-15T11:00');
+    h.reply({ error: 'Invalid timezone' });
+    await h.sandbox.loadScheduleInfo();
+    assert.equal(h.state.fogTimezone, null);
+    assert.equal(h.elements.scheduleAt.disabled, true);
+});
+
+test('11:00 entered for a UTC FOG server is stored and confirmed as 11:00 on the selected date', { timeout: 5000 }, async t => {
+    for (const action of ['deploy', 'capture', 'snapinRun']) {
+        const h = await harness(t);
+        const r = await h.call({ action, hostIds: '1038', snapinId: '41', scheduleMode: 'fog', scheduleTimezone: 'UTC', scheduledFor: '2030-10-13 11:00' });
+        assert.equal(r.body.results['1038'].ok, true, JSON.stringify(r.body));
+        const created = h.requests.find(r => r.method === 'POST' && r.path === '/fog/scheduledtask/create');
+        assert.equal(created.body.scheduleTime, Date.parse('2030-10-13T11:00:00Z') / 1000);
+        assert.ok(created.body.name.endsWith('2030-10-13 11:00 FOG'));
+        assert.equal(r.body.results['1038'].data.runtime, '2030-10-13 11:00');
+        assert.equal(h.history()[0].scheduleTimezone, 'UTC');
+        assert.equal(h.history()[0].scheduledFor, '2030-10-13 11:00');
+    }
+});
+
+test('configured FOG timezone follows DST and retains date across midnight and year boundaries', { timeout: 5000 }, async t => {
+    const h = await harness(t, null, { fogTimezone: 'Europe/Paris' });
+    for (const [wall, expected] of [
+        ['2030-07-15 11:00', '2030-07-15T09:00:00Z'],
+        ['2030-01-15 11:00', '2030-01-15T10:00:00Z'],
+        ['2030-01-01 00:15', '2029-12-31T23:15:00Z'],
+        ['2030-07-15 00:00', '2030-07-14T22:00:00Z']
+    ]) {
+        const r = await h.call({ action: 'snapinRun', hostIds: '1038', snapinId: '41', scheduleMode: 'fog', scheduledFor: wall });
+        assert.equal(r.body.results['1038'].ok, true, JSON.stringify(r.body));
+        assert.equal(r.body.results['1038'].data.runtime, wall);
+        assert.equal(r.body.results['1038'].data.scheduleTime, Date.parse(expected) / 1000);
+    }
+});
+
+test('invalid, past, DST-ambiguous or conflicting FOG times fail before any FOG calls', { timeout: 5000 }, async t => {
+    const h = await harness(t, null, { fogTimezone: 'Europe/Paris' });
+    for (const request of [
+        { scheduledFor: '2030-03-31 02:30' }, // Skipped in Paris.
+        { scheduledFor: '2030-10-27 02:30' }, // Repeated in Paris.
+        { scheduledFor: '2030-02-30 11:00' },
+        { scheduledFor: '2030-13-13 11:00' },
+        { scheduledFor: '2020-10-13 11:00' },
+        { scheduledFor: '2030-10-13 24:30' },
+        { scheduledFor: '' },
+        { scheduledFor: '2030-10-13T11:00Z' },
+        { scheduledFor: '2030-10-13 11:00', scheduleTime: '1894699800' },
+        { scheduledFor: '2030-10-13 11:00', scheduleTimezone: 'UTC' },
+        { scheduledFor: '2030-10-13 11:00', scheduleMode: 'unknown' }
+    ]) {
+        const r = await h.call({ action: 'deploy', hostIds: '1038', scheduleMode: 'fog', ...request });
+        assert.equal(r.status, 400, JSON.stringify(request));
+    }
+    assert.equal(h.requests.length, 0);
+});
+
+test('scheduleInfo exposes only FOG clock metadata and rejects invalid zone configuration', { timeout: 5000 }, async t => {
+    const h = await harness(t);
+    const r = await h.call({ action: 'scheduleInfo' });
+    assert.equal(r.body.timezone, 'UTC');
+    assert.equal(r.body.clock, new Date(r.body.now).toISOString().slice(0, 16).replace('T', ' '));
+    assert.deepEqual(Object.keys(r.body).sort(), ['clock', 'now', 'timezone']);
+    const bad = await harness(t, null, { fogTimezone: 'Not/AZone' });
+    assert.equal((await bad.call({ action: 'scheduleInfo' })).status, 400);
+    assert.equal((await bad.call({ action: 'snapinRun', hostIds: '1038', snapinId: '41', scheduleMode: 'fog', scheduledFor: '2030-10-13 11:00' })).status, 400);
+    assert.equal(bad.requests.length, 0);
+});
+
+test('a FOG runtime mismatch removes the new schedule and reports failure instead of a shifted task', { timeout: 5000 }, async t => {
+    const h = await harness(t, (req, fallback) => {
+        const reply = fallback();
+        if (req.method === 'GET' && reply.status === 200) reply.data.runtime = '2030-10-13 13:00';
+        return reply;
+    });
+    const r = await h.call({ action: 'snapinRun', hostIds: '1038', snapinId: '41', scheduleMode: 'fog', scheduledFor: '2030-10-13 11:00' });
+    assert.equal(r.body.results['1038'].ok, false);
+    assert.match(r.body.results['1038'].error, /Planification retirée/);
+    assert.deepEqual(h.requests.map(r => r.method), ['POST', 'GET', 'DELETE', 'GET']);
+    assert.equal(h.history()[0].ko, 1);
+});
+
+test('a failed rollback identifies the wrong-time schedule that still needs cancellation', { timeout: 5000 }, async t => {
+    const h = await harness(t, (req, fallback) => {
+        if (req.method === 'DELETE') return { status: 403, data: { error: 'Denied' } };
+        const reply = fallback();
+        if (req.method === 'GET' && reply.status === 200) reply.data.runtime = '2030-10-13 13:00';
+        return reply;
+    });
+    const r = await h.call({ action: 'snapinRun', hostIds: '1038', snapinId: '41', scheduleMode: 'fog', scheduledFor: '2030-10-13 11:00' });
+    assert.equal(r.body.results['1038'].ok, false);
+    assert.match(r.body.results['1038'].error, /retrait non confirmé.*#700/);
+    assert.equal(h.requests.filter(r => r.method === 'POST').length, 1);
+});
+
+test('end-to-end browser 11:00 input reaches the FOG API as 11:00, not 09:00', { timeout: 5000 }, async t => {
+    const h = await harness(t);
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const helper = source.slice(source.indexOf('  function localTimeZone('), source.indexOf('  function updateScheduledSelection('));
-    const script = helper + `
-        const elements = { scheduleOn: { checked: true }, scheduleAt: {}, scheduleTimezone: {} };
-        function $(id) { return elements[id]; }
-        const results = ['2030-01-15T10:45', '2030-07-15T10:45'].map(value => {
-            elements.scheduleAt.value = value;
-            updateScheduleTimezone();
-            return [elements.scheduleTimezone.textContent, new Date(value).toISOString()];
-        });
-        console.log(JSON.stringify(results));`;
-    const paris = JSON.parse(execFileSync(process.execPath, ['-e', script], { env: { ...process.env, TZ: 'Europe/Paris' }, encoding: 'utf8' }));
-    assert.deepEqual(paris, [
-        ['Heure locale : Europe/Paris (UTC+01:00)', '2030-01-15T09:45:00.000Z'],
-        ['Heure locale : Europe/Paris (UTC+02:00)', '2030-07-15T08:45:00.000Z']
-    ]);
-    const utc = JSON.parse(execFileSync(process.execPath, ['-e', script], { env: { ...process.env, TZ: 'UTC' }, encoding: 'utf8' }));
-    assert.equal(utc[1][1], '2030-07-15T10:45:00.000Z');
-    assert.match(utc[1][0], /UTC\+00:00/);
+    const runAction = source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
+    const controls = {
+        actionSel: { value: 'snapin' }, snapinSel: { value: '41' },
+        scheduleOn: { checked: true }, scheduleAt: { value: '2030-10-13T11:00' },
+        optWol: {}, optShutdown: {}, optJoinAd: {}, optForceName: {}, progress: {}
+    };
+    let finished;
+    const result = new Promise(resolve => { finished = resolve; });
+    vm.runInNewContext(runAction + '\nrunAction();', {
+        $: id => controls[id], selectedNodeIds: () => ['node1'],
+        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC' },
+        confirm: () => true, alert: message => assert.fail(message), log() {}, selectTaskTab() {},
+        api: (action, params) => h.call({ action, ...params }).then(r => { finished(r.body); return r.body; })
+    });
+    const response = await result;
+    assert.equal(response.results['1038'].ok, true, JSON.stringify(response));
+    assert.equal(response.results['1038'].data.runtime, '2030-10-13 11:00');
+    assert.equal(response.results['1038'].data.scheduleTime, Date.parse('2030-10-13T11:00:00Z') / 1000);
 });

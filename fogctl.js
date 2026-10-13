@@ -189,12 +189,60 @@ module.exports.fogctl = function (parent) {
         res.status(code || 200).set('Content-Type', 'application/json').send(JSON.stringify(payload));
     }
 
-    // The browser supplies an absolute Unix timestamp. Parsing datetime-local
-    // on MeshCentral would reinterpret the admin's time in the server timezone.
+    function fogTimezone() {
+        var zone = (loadConfig() || {}).fogTimezone || 'UTC';
+        try { new Intl.DateTimeFormat('en', { timeZone: zone }).format(); }
+        catch (e) { throw new Error('fogTimezone invalide dans fog-config.json. Utilisez le fuseau FOG_TZ_INFO de FOG.'); }
+        return zone;
+    }
+
+    function fogWallTime(timestamp, zone) {
+        var parts = {};
+        new Intl.DateTimeFormat('en-GB', {
+            timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+        }).formatToParts(new Date(timestamp * 1000)).forEach(function (p) { parts[p.type] = p.value; });
+        return parts.year + '-' + parts.month + '-' + parts.day + ' ' + parts.hour + ':' + parts.minute;
+    }
+
+    // Convert the clock reading selected by the admin in FOG's timezone.
+    // Sample offsets around the date to handle DST; never apply the browser's
+    // or MeshCentral's timezone, or a fixed +1/+2 hour correction.
+    function fogScheduleTime(value, zone) {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(value)) {
+            throw new Error('Date/heure FOG invalide.');
+        }
+        var wall = value.replace('T', ' ');
+        var base = Date.parse(wall.replace(' ', 'T') + ':00Z') / 1000;
+        if (!Number.isFinite(base) || fogWallTime(base, 'UTC') !== wall) {
+            throw new Error('Date/heure FOG invalide.');
+        }
+        var candidates = {};
+        for (var hours = -36; hours <= 36; hours += 6) {
+            var sample = base + hours * 3600;
+            var shown = Date.parse(fogWallTime(sample, zone).replace(' ', 'T') + ':00Z') / 1000;
+            var candidate = base - (shown - sample);
+            if (fogWallTime(candidate, zone) === wall) candidates[candidate] = true;
+        }
+        var matches = Object.keys(candidates);
+        if (matches.length !== 1) {
+            throw new Error('Cette heure FOG est ' + (matches.length ? 'ambiguë' : 'inexistante') + ' au changement d’heure. Choisissez une autre heure.');
+        }
+        return Number(matches[0]);
+    }
+
+    // New UI requests use FOG wall time. Keep absolute timestamps supported
+    // for existing API integrations that deliberately specify an instant.
     function getScheduleTime(query) {
-        if (query.scheduleTime === undefined && !query.scheduledFor) return null;
+        if (query.scheduleTime === undefined && !query.scheduledFor && !query.scheduleMode) return null;
         var timestamp;
-        if (typeof query.scheduleTime === 'string' && /^\d+$/.test(query.scheduleTime)) {
+        if (query.scheduleMode === 'fog') {
+            if (query.scheduleTime !== undefined) throw new Error('Ne combinez pas heure FOG et timestamp absolu.');
+            if (query.scheduleTimezone && query.scheduleTimezone !== fogTimezone()) throw new Error('Le fuseau FOG a changé. Rechargez le module.');
+            timestamp = fogScheduleTime(query.scheduledFor, fogTimezone());
+        } else if (query.scheduleMode) {
+            throw new Error('Mode de planification inconnu.');
+        } else if (typeof query.scheduleTime === 'string' && /^\d+$/.test(query.scheduleTime)) {
             timestamp = Number(query.scheduleTime);
         } else if (query.scheduleTime === undefined && typeof query.scheduledFor === 'string'
             && /(?:Z|[+-]\d{2}:\d{2})$/.test(query.scheduledFor)) {
@@ -209,12 +257,12 @@ module.exports.fogctl = function (parent) {
         return timestamp;
     }
 
-    function createScheduledTask(hostId, taskType, timestamp, snapinId, wol, shutdown) {
+    function createScheduledTask(hostId, taskType, timestamp, snapinId, wol, shutdown, expectedFogTime) {
         if (timestamp <= Math.floor(Date.now() / 1000)) {
             return Promise.reject(new Error('Scheduled time has passed; no task was created.'));
         }
         var body = {
-            name: 'fogctl ' + taskType + ' host ' + hostId + ' ' + new Date(timestamp * 1000).toISOString(),
+            name: 'fogctl ' + taskType + ' host ' + hostId + ' ' + (expectedFogTime ? expectedFogTime.replace('T', ' ') + ' FOG' : new Date(timestamp * 1000).toISOString()),
             hostID: Number(hostId), taskTypeID: taskType,
             type: 'S', isGroupTask: 0, scheduleTime: timestamp, isActive: 1,
             shutdown: shutdown ? 1 : 0,
@@ -246,6 +294,19 @@ module.exports.fogctl = function (parent) {
                     throw new Error('FOG did not confirm the expected active schedule, host and task settings.');
                 }
                 saved.scheduledTaskId = id;
+                if (expectedFogTime && task.runtime !== expectedFogTime.replace('T', ' ')) {
+                    // Do not leave a schedule at the wrong wall time if the
+                    // plugin's configured timezone differs from FOG_TZ_INFO.
+                    return fogCall('DELETE', '/fog/scheduledtask/' + id).then(function () {
+                        return fogCall('GET', '/fog/scheduledtask/' + id).then(function () {
+                            throw new Error('La planification existe encore.');
+                        }, function (e) { if (e.statusCode !== 404) throw e; });
+                    }).then(function () {
+                        throw new Error('Heure FOG inattendue (' + (task.runtime || 'absente') + '). Planification retirée. Réglez fogTimezone comme FOG_TZ_INFO.');
+                    }, function (e) {
+                        throw new Error('Heure FOG inattendue ; retrait non confirmé : ' + e.message + ' Annulez la planification #' + id + ' dans FOG.');
+                    });
+                }
                 return saved;
             }).catch(function (error) {
                 throw new Error('Scheduled task #' + id + ' was returned by FOG but verification failed: '
@@ -276,6 +337,13 @@ module.exports.fogctl = function (parent) {
             return fogCall('GET', '/fog/host?count=1')
                 .then(function (r) { sendJson(res, 200, { ok: true, fogUrl: cfg.fogUrl, info: { hosts: (r.data && r.data.count) || (Array.isArray(r.data && r.data.hosts) ? r.data.hosts.length : 0) } }); })
                 .catch(function (e) { sendJson(res, 200, { ok: false, error: e.message }); });
+        }
+
+        if (action === 'scheduleInfo') {
+            try {
+                var zone = fogTimezone();
+                return sendJson(res, 200, { timezone: zone, now: Date.now(), clock: fogWallTime(Date.now() / 1000, zone) });
+            } catch (e) { return sendJson(res, 400, { error: e.message }); }
         }
 
         // -------- lookup: resolve a single MAC and/or hostname to a FOG host --------
@@ -312,7 +380,7 @@ module.exports.fogctl = function (parent) {
         // -------- deploy: task type 1 on a list of FOG host ids --------
         // -------- capture: same but task type 2 --------
         // Optional `imageId` overrides the host's assigned image (deploy only).
-        // Optional `scheduleTime` (Unix seconds from the browser) turns
+        // Optional FOG wall time or absolute `scheduleTime` turns
         // the immediate task into a single-shot scheduled task via /fog/scheduledtask.
         if (action === 'deploy' || action === 'capture') {
             var taskType = (action === 'deploy') ? 1 : 2;
@@ -339,7 +407,7 @@ module.exports.fogctl = function (parent) {
             function postTask(id) {
                 var endpoint, body;
                 if (scheduleTime !== null) {
-                    return createScheduledTask(id, taskType, scheduleTime, 0, wantWol, wantShutdown);
+                    return createScheduledTask(id, taskType, scheduleTime, 0, wantWol, wantShutdown, req.query.scheduleMode === 'fog' ? scheduledFor : null);
                 }
                 endpoint = '/fog/host/' + encodeURIComponent(id) + '/task';
                 body = { taskTypeID: taskType };
@@ -359,6 +427,7 @@ module.exports.fogctl = function (parent) {
                         ok: ok, ko: ko,
                         scheduledFor: scheduledFor || null,
                         scheduleTime: scheduleTime,
+                        scheduleTimezone: req.query.scheduleMode === 'fog' ? fogTimezone() : null,
                         results: historyResults(out),
                         overrideImg: overrideImg || null,
                         wol: wantWol, shutdown: wantShutdown,
@@ -519,7 +588,7 @@ module.exports.fogctl = function (parent) {
                 var b;
                 var ep;
                 if (snapinScheduleTime !== null) {
-                    return createScheduledTask(hostId, 13, snapinScheduleTime, selectedSnapinId, snapinWol, snapinShutdown);
+                    return createScheduledTask(hostId, 13, snapinScheduleTime, selectedSnapinId, snapinWol, snapinShutdown, req.query.scheduleMode === 'fog' ? snapinSchedFor : null);
                 }
                 ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
                 b = { taskTypeID: 13, deploySnapins: selectedSnapinId };
@@ -539,6 +608,7 @@ module.exports.fogctl = function (parent) {
                         ok: okS, ko: koS,
                         scheduledFor: snapinSchedFor || null,
                         scheduleTime: snapinScheduleTime,
+                        scheduleTimezone: req.query.scheduleMode === 'fog' ? fogTimezone() : null,
                         results: historyResults(out2),
                         wol: snapinWol, shutdown: snapinShutdown,
                     });
