@@ -257,11 +257,12 @@ test('the browser sends Unix seconds for the selected local time and logs the ve
         scheduleOn: { checked: true }, scheduleAt: { value: '2030-01-15T10:30' },
         optWol: {}, optShutdown: {}, optJoinAd: {}, optForceName: {}, progress: {}
     };
-    const calls = [], logs = [];
+    const calls = [], logs = [], tabs = [];
     const sandbox = {
         $: id => controls[id], selectedNodeIds: () => ['node1'],
         state: { fogMap: { node1: { id: '1038' } } }, confirm: () => true,
         alert: message => assert.fail(message), log: message => logs.push(message),
+        selectTaskTab: tab => tabs.push(tab),
         api: (action, params) => {
             calls.push({ action, params });
             return Promise.resolve({ results: { '1038': { ok: true, scheduledTaskId: 700 } } });
@@ -272,4 +273,106 @@ test('the browser sends Unix seconds for the selected local time and logs the ve
     assert.equal(calls.length, 1);
     assert.equal(calls[0].params.scheduleTime, String(new Date('2030-01-15T10:30').getTime() / 1000));
     assert.ok(logs.some(message => message.includes('scheduled task #700')));
+    assert.deepEqual(tabs, ['scheduled']);
+});
+
+test('scheduledTasks lists active schedules from FOG without exposing host credentials', { timeout: 5000 }, async t => {
+    const h = await harness(t, request => {
+        assert.equal(request.method, 'GET');
+        assert.equal(request.path, '/fog/scheduledtask/active');
+        return { status: 200, data: { scheduledtasks: [
+            { id: '8', hostID: '1031', isActive: '1', type: 'S', taskTypeID: '13', other2: '41', scheduleTime: '1894700000', host: { name: 'PC-LAB', ADPass: 'secret' } },
+            { id: '7', hostID: '1038', isActive: '1', type: 'S', taskTypeID: '1', scheduleTime: '1894699800', host: { name: 'PC-00009-LMC' } },
+            { id: '9', hostID: '10', isActive: '1', type: 'C', isGroupTask: '1', taskTypeID: '2', group: { name: 'Room A' }, runtime: '2030-01-16 07:00', minute: '0', hour: '7', dayOfMonth: '*', month: '*', dayOfWeek: '1-5', tasktype: { name: 'Capture' } },
+            { id: '6', hostID: '1', isActive: '0', type: 'S', taskTypeID: '1' }
+        ] } };
+    });
+    const response = await h.call({ action: 'scheduledTasks' });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.count, 3);
+    assert.deepEqual(response.body.tasks.map(t => t.taskId), ['7', '8', '9']);
+    assert.equal(response.body.tasks[1].snapinId, '41');
+    assert.equal(response.body.tasks[1].label, 'Single Snapin');
+    assert.equal(response.body.tasks[2].isGroup, true);
+    assert.equal(response.body.tasks[2].targetName, 'Room A');
+    assert.equal(response.body.tasks[2].cron, '0 7 * * 1-5');
+    assert.equal(JSON.stringify(response.body).includes('secret'), false);
+});
+
+test('scheduledTasks distinguishes an empty list from API errors and invalid data', { timeout: 5000 }, async t => {
+    for (const [reply, status] of [
+        [{ status: 200, data: { scheduledtasks: [] } }, 200],
+        [{ status: 200, data: '' }, 500],
+        [{ status: 503, data: { error: 'Unavailable' } }, 500]
+    ]) {
+        const h = await harness(t, () => reply);
+        const response = await h.call({ action: 'scheduledTasks' });
+        assert.equal(response.status, status);
+        if (status === 200) assert.deepEqual(response.body.tasks, []);
+        else assert.ok(response.body.error);
+    }
+});
+
+function scheduledTabHarness() {
+    const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
+    const code = source.slice(source.indexOf('  function renderScheduledTasks() {'), source.indexOf('  function showTasks(v) {'));
+    const elements = {};
+    const state = {
+        taskTab: 'active', scheduledList: [], snapins: [], scheduledLoaded: false,
+        scheduledLoading: false, scheduledError: '', checkedTasks: { '99': true }
+    };
+    const calls = [];
+    let reply = { tasks: [] };
+    const sandbox = {
+        state,
+        $: id => elements[id] || (elements[id] = {
+            setAttribute(key, value) { this[key] = value; }, focus() { this.focused = true; }
+        }),
+        escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
+        api: action => { calls.push(action); return Promise.resolve(reply); },
+        pollActiveTasks: () => calls.push('activeTasks')
+    };
+    vm.runInNewContext(code, sandbox);
+    return { sandbox, state, elements, calls, reply(value) { reply = value; } };
+}
+
+test('scheduled tab renders target, snapin and recurrence safely and preserves rows on failure', async () => {
+    const h = scheduledTabHarness();
+    h.state.snapins = [{ id: '41', name: '<script>bad</script>' }];
+    h.reply({ tasks: [
+        { taskId: '8', targetName: '<b>PC</b>', type: '13', label: 'Single Snapin', snapinId: '41', scheduleType: 'S', scheduleTime: 1894699800 },
+        { taskId: '9', targetName: 'Room A', isGroup: true, label: 'Capture', scheduleType: 'C', runtime: '2030-01-16 07:00', cron: '0 7 * * 1-5' }
+    ] });
+    await h.sandbox.pollScheduledTasks();
+    const html = h.elements.scheduledBody.innerHTML;
+    assert.ok(html.includes('&lt;b&gt;PC&lt;/b&gt;'));
+    assert.ok(html.includes('&lt;script&gt;bad&lt;/script&gt;'));
+    assert.ok(html.includes('Groupe : Room A'));
+    assert.ok(html.includes('2030-01-16 07:00 (heure FOG)'));
+    assert.ok(html.includes('0 7 * * 1-5'));
+    assert.ok(html.includes('#8'));
+    h.reply({ error: 'FOG unavailable' });
+    await h.sandbox.pollScheduledTasks();
+    assert.equal(h.elements.scheduledBody.innerHTML, html);
+    assert.match(h.elements.scheduledMessage.textContent, /FOG unavailable.*Dernières données conservées/);
+    assert.equal(h.elements.scheduledCount.textContent, 2);
+});
+
+test('tabs switch by mouse or keyboard and keep cancellation exclusive to active tasks', async () => {
+    const h = scheduledTabHarness();
+    h.sandbox.selectTaskTab('scheduled');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.elements.activeTasksPane.hidden, true);
+    assert.equal(h.elements.scheduledTasksPane.hidden, false);
+    assert.equal(h.elements.cancelTasksBtn.hidden, true);
+    assert.equal(h.elements.scheduledTasksTab['aria-selected'], 'true');
+    assert.match(h.elements.scheduledBody.innerHTML, /Aucune tâche planifiée/);
+    let prevented = false;
+    h.sandbox.taskTabKeydown({ key: 'ArrowLeft', preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(h.elements.activeTasksPane.hidden, false);
+    assert.equal(h.elements.cancelTasksBtn.hidden, false);
+    assert.equal(h.elements.activeTasksTab.focused, true);
+    assert.deepEqual(h.state.checkedTasks, { '99': true });
+    assert.deepEqual(h.calls, ['scheduledTasks', 'activeTasks']);
 });

@@ -589,6 +589,49 @@ module.exports.fogctl = function (parent) {
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
+        // -------- scheduledTasks: pending single-run and recurring FOG tasks --------
+        if (action === 'scheduledTasks') {
+            return fogCall('GET', '/fog/scheduledtask/active')
+                .then(function (r) {
+                    var arr = r.data && r.data.scheduledtasks;
+                    if (!Array.isArray(arr)) {
+                        throw new Error('FOG returned an invalid scheduled task list');
+                    }
+                    var typeNames = { '1': 'Deploy', '2': 'Capture', '8': 'Multicast', '12': 'All Snapins', '13': 'Single Snapin' };
+                    var list = arr.filter(function (t) { return Number(t.isActive) === 1; }).map(function (t) {
+                        var isGroup = Number(t.isGroupTask) === 1;
+                        var target = (isGroup ? t.group : t.host) || {};
+                        var typeId = String(t.taskTypeID || (t.tasktype && t.tasktype.id) || '');
+                        var timestamp = Number(t.scheduleTime);
+                        return {
+                            taskId: t.id,
+                            targetId: t.hostID || target.id,
+                            targetName: target.name || '',
+                            isGroup: isGroup,
+                            name: t.name || '',
+                            label: (t.tasktype && t.tasktype.name) || typeNames[typeId] || ('Task ' + typeId),
+                            type: typeId,
+                            scheduleType: t.type,
+                            scheduleTime: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null,
+                            runtime: t.runtime || '',
+                            cron: [t.minute, t.hour, t.dayOfMonth, t.month, t.dayOfWeek].map(function (v) {
+                                return v == null ? '*' : String(v);
+                            }).join(' '),
+                            snapinId: typeId === '13' ? t.other2 : null,
+                            wol: Number(t.other4) === 1,
+                            shutdown: Number(t.shutdown) === 1
+                        };
+                    });
+                    list.sort(function (a, b) {
+                        var at = a.scheduleType === 'S' && a.scheduleTime ? a.scheduleTime : Infinity;
+                        var bt = b.scheduleType === 'S' && b.scheduleTime ? b.scheduleTime : Infinity;
+                        return (at - bt) || Number(a.taskId) - Number(b.taskId);
+                    });
+                    sendJson(res, 200, { tasks: list, count: list.length });
+                })
+                .catch(function (e) { sendJson(res, 500, { error: e.message }); });
+        }
+
         // -------- cancel: cancel one or several tasks --------
         // FOG REST has fluctuated on which verb/endpoint cancels a task across
         // 1.5.x point releases. We try DELETE /fog/task/{id} first, fall back to

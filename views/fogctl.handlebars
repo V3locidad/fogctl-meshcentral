@@ -38,13 +38,21 @@
   #tasksPanel .tphead { padding: 8px; background: #eee; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px; }
   #tasksPanel .tphead h3 { margin: 0; font-size: 13px; flex: 0 0 auto; }
   #tasksPanel .tphead .spacer { flex: 1; }
-  #tasksTable { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #tasksTable th, #tasksTable td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-  #tasksTable th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
+  #tasksPanel { flex: 0 0 auto; }
+  .task-tabs { display: flex; gap: 4px; }
+  .task-tabs button { background: transparent; border-color: transparent; }
+  .task-tabs button[aria-selected="true"] { background: white; border-color: #2c7be5; color: #195cb5; font-weight: 600; }
+  #tasksPanel table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #tasksPanel th, #tasksPanel td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
+  #tasksPanel th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
+  #scheduledMessage { padding: 6px 8px; color: #666; font-size: 11px; }
+  #scheduledMessage.error { color: #a4262c; }
+  .schedule-date { white-space: nowrap; }
+  .scheduled-details { display: block; color: #666; margin-top: 2px; }
   #tasksTable .progress-cell { width: 120px; }
   #tasksTable .progress-bar { background: #eee; border-radius: 3px; overflow: hidden; height: 10px; position: relative; }
   #tasksTable .progress-fill { background: #2c7be5; height: 100%; transition: width 0.3s; }
-  #tasksTableWrap { max-height: 180px; overflow: auto; }
+  #tasksTableWrap, #scheduledTableWrap { max-height: 180px; overflow: auto; }
 </style>
 </head>
 <body>
@@ -83,12 +91,16 @@
 
 <div id="tasksPanel">
   <div class="tphead">
-    <h3>Active FOG tasks <span id="taskCount" class="pill">0</span></h3>
+    <div class="task-tabs" role="tablist" aria-label="Tâches FOG">
+      <button id="activeTasksTab" role="tab" aria-selected="true" aria-controls="activeTasksPane" tabindex="0">Tâches actives <span id="taskCount" class="pill">0</span></button>
+      <button id="scheduledTasksTab" role="tab" aria-selected="false" aria-controls="scheduledTasksPane" tabindex="-1">Tâches planifiées <span id="scheduledCount" class="pill">—</span></button>
+    </div>
     <span class="spacer"></span>
     <button id="refreshTasksBtn">Refresh</button>
     <button id="cancelTasksBtn" class="primary">Cancel selected</button>
   </div>
-  <div id="tasksTableWrap">
+  <div id="activeTasksPane" role="tabpanel" aria-labelledby="activeTasksTab">
+   <div id="tasksTableWrap">
     <table id="tasksTable">
       <thead>
         <tr>
@@ -102,6 +114,16 @@
       </thead>
       <tbody id="tasksBody"></tbody>
     </table>
+   </div>
+  </div>
+  <div id="scheduledTasksPane" role="tabpanel" aria-labelledby="scheduledTasksTab" hidden>
+    <div id="scheduledMessage" role="status" aria-live="polite"></div>
+    <div id="scheduledTableWrap">
+      <table id="scheduledTable">
+        <thead><tr><th>Poste / groupe</th><th>Type / snapin</th><th>Date prévue</th><th>État</th><th>ID FOG</th></tr></thead>
+        <tbody id="scheduledBody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -135,7 +157,12 @@
     images: [],
     taskMap: {},  // hostID -> { type, label, percent, state }
     tasksList: [],     // flat list of active tasks for the Active tasks panel
-    checkedTasks: {}   // taskId -> true
+    checkedTasks: {},  // taskId -> true
+    taskTab: 'active',
+    scheduledList: [],
+    scheduledLoaded: false,
+    scheduledLoading: false,
+    scheduledError: ''
   };
 
   function $(id) { return document.getElementById(id); }
@@ -437,6 +464,85 @@
     }
   }
 
+  function renderScheduledTasks() {
+    $('scheduledCount').textContent = state.scheduledLoaded ? state.scheduledList.length : '—';
+    var message = $('scheduledMessage');
+    message.className = state.scheduledError ? 'error' : '';
+    message.textContent = state.scheduledError
+      ? 'Actualisation impossible : ' + state.scheduledError + (state.scheduledLoaded ? ' — Dernières données conservées.' : '')
+      : (state.scheduledLoading ? 'Chargement…' : 'Dates dans votre fuseau horaire. Les récurrences sont indiquées en heure FOG.');
+    var rows = state.scheduledList.map(function (t) {
+      var target = t.targetName || ((t.isGroup ? 'Groupe #' : 'Poste #') + t.targetId);
+      if (t.isGroup && t.targetName) target = 'Groupe : ' + target;
+      var details = '';
+      if (t.snapinId) {
+        var snapin = state.snapins.find(function (s) { return String(s.id) === String(t.snapinId); });
+        details = '<small class="scheduled-details">' + escapeHtml(snapin ? snapin.name : ('Snapin #' + t.snapinId)) + '</small>';
+      }
+      var date, status;
+      if (t.scheduleType === 'C') {
+        date = (t.runtime || 'Date indisponible') + ' (heure FOG)';
+        status = 'Récurrente';
+        details += '<small class="scheduled-details">Cron : ' + escapeHtml(t.cron) + '</small>';
+      } else {
+        date = t.scheduleTime ? new Date(t.scheduleTime * 1000).toLocaleString() : 'Date indisponible';
+        status = t.scheduleTime && t.scheduleTime * 1000 <= Date.now() ? 'Échéance atteinte' : 'En attente';
+      }
+      return '<tr title="' + escapeHtml(t.name) + '">'
+        + '<td>' + escapeHtml(target) + '</td>'
+        + '<td>' + escapeHtml(t.label) + details + '</td>'
+        + '<td class="schedule-date">' + escapeHtml(date) + '</td>'
+        + '<td>' + escapeHtml(status) + '</td>'
+        + '<td>#' + escapeHtml(t.taskId) + '</td></tr>';
+    }).join('');
+    var empty = state.scheduledError ? 'Liste indisponible.' : (state.scheduledLoaded ? 'Aucune tâche planifiée en attente.' : 'Chargement…');
+    $('scheduledBody').innerHTML = rows || '<tr><td colspan="5" style="text-align:center;color:#888;padding:10px">' + empty + '</td></tr>';
+  }
+
+  function pollScheduledTasks() {
+    if (state.scheduledLoading) return;
+    state.scheduledLoading = true;
+    renderScheduledTasks();
+    return api('scheduledTasks').then(function (r) {
+      if (r && r.error) throw new Error(r.error);
+      if (!r || !Array.isArray(r.tasks)) throw new Error('Réponse FOG invalide');
+      state.scheduledList = r.tasks;
+      state.scheduledLoaded = true;
+      state.scheduledError = '';
+      state.scheduledLoading = false;
+      renderScheduledTasks();
+    }).catch(function (e) {
+      state.scheduledLoading = false;
+      state.scheduledError = e.message;
+      renderScheduledTasks();
+    });
+  }
+
+  function selectTaskTab(tab) {
+    var scheduled = tab === 'scheduled';
+    state.taskTab = scheduled ? 'scheduled' : 'active';
+    $('activeTasksPane').hidden = scheduled;
+    $('scheduledTasksPane').hidden = !scheduled;
+    $('cancelTasksBtn').hidden = scheduled;
+    $('activeTasksTab').setAttribute('aria-selected', String(!scheduled));
+    $('scheduledTasksTab').setAttribute('aria-selected', String(scheduled));
+    $('activeTasksTab').tabIndex = scheduled ? -1 : 0;
+    $('scheduledTasksTab').tabIndex = scheduled ? 0 : -1;
+    if (scheduled) pollScheduledTasks();
+    else pollActiveTasks();
+  }
+
+  function taskTabKeydown(event) {
+    var tab;
+    if (event.key === 'Home') tab = 'active';
+    else if (event.key === 'End') tab = 'scheduled';
+    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') tab = state.taskTab === 'active' ? 'scheduled' : 'active';
+    else return;
+    event.preventDefault();
+    selectTaskTab(tab);
+    $(tab === 'active' ? 'activeTasksTab' : 'scheduledTasksTab').focus();
+  }
+
   function showTasks(v) {
     $('tasksPanel').style.display = v ? 'block' : 'none';
     resizeCols();
@@ -494,6 +600,7 @@
         o.textContent = s.name;
         sel.appendChild(o);
       });
+      if (state.scheduledLoaded) renderScheduledTasks();
     }).catch(function (e) { log('snapinList failed: ' + e.message); });
   }
 
@@ -706,7 +813,10 @@
           });
           $('progress').textContent = ok + '/' + hostIds.length + (ko ? ' (' + ko + ' failed)' : '');
           log('Done. ' + ok + ' ok, ' + ko + ' failed.');
-          if (extra.scheduleTime && ok) log('View in FOG: Task Management > Scheduled Tasks.');
+          if (extra.scheduleTime && ok) {
+            log('Les tâches sont visibles dans l’onglet Tâches planifiées.');
+            selectTaskTab('scheduled');
+          }
           errs.slice(0, 10).forEach(function (e) { log('  ' + e); });
         } else if (r && r.error) {
           log('Error: ' + r.error);
@@ -746,9 +856,17 @@
     $('tplDelBtn').onclick = deleteSelectedTemplate;
     $('tplSel').onchange = applySelectedTemplate;
     loadTemplates();
-    $('refreshTasksBtn').onclick = function () { pollActiveTasks(); };
+    $('refreshTasksBtn').onclick = function () {
+      if (state.taskTab === 'scheduled') pollScheduledTasks();
+      else pollActiveTasks();
+    };
+    $('activeTasksTab').onclick = function () { selectTaskTab('active'); };
+    $('scheduledTasksTab').onclick = function () { selectTaskTab('scheduled'); };
+    $('activeTasksTab').onkeydown = taskTabKeydown;
+    $('scheduledTasksTab').onkeydown = taskTabKeydown;
     $('cancelTasksBtn').onclick = cancelSelectedTasks;
     renderTasks();
+    renderScheduledTasks();
     $('actionSel').onchange = function () {
       var a = $('actionSel').value;
       $('snapinWrap').style.display = (a === 'snapin') ? '' : 'none';
@@ -786,7 +904,11 @@
         loadSnapins();
         autoResolveSoon();
         pollActiveTasks();
-        setInterval(pollActiveTasks, 8000);
+        pollScheduledTasks();
+        setInterval(function () {
+          pollActiveTasks();
+          if (state.taskTab === 'scheduled') pollScheduledTasks();
+        }, 8000);
       } else {
         el.textContent = 'FOG: ' + (r && r.error ? r.error : 'unreachable');
         el.style.background = '#f8d7da';

@@ -12,6 +12,7 @@ Built for IT admins running classroom/lab fleets where the same image or snapin 
 - **Live online indicator** (`● green` / `○ red`)
 - **Actions**: Deploy image, Capture image, Run snapin
 - **Inline progress and logs**
+- **Task tabs** — switch between active tasks and pending FOG schedules, with dates, host/group names, snapins and FOG IDs
 - **Server-side FOG API calls** — credentials never leave the MeshCentral server
 
 ## Requirements
@@ -72,6 +73,7 @@ The plugin runs entirely server-side for the FOG calls. The browser only talks t
 | `capture`    | same with `taskTypeID: 2`                                      |
 | `snapinList` | `GET /fog/snapin`                                              |
 | `snapinRun`  | `POST /fog/host/{id}/task` with `taskTypeID: 13` and `deploySnapins: <selected snapin ID>` |
+| `scheduledTasks` | `GET /fog/scheduledtask/active`, returning a display-only task summary |
 | `tasks`      | `GET /fog/task/active`                                         |
 | `cancel`     | `DELETE /fog/task/{id}/cancel`                                 |
 
@@ -85,7 +87,9 @@ The date/time picker uses the administrator's browser timezone. The browser send
 
 A scheduled operation counts as successful only when FOG returns a task ID and `GET /fog/scheduledtask/{id}` confirms the active task, host, type, timestamp and options. Logs and History show the confirmed task ID for each host, or the verification error. A failed verification never retries creation automatically, because the original task may already exist.
 
-In FOG, open **Task Management → Scheduled Tasks** to see pending schedules. The plugin's **Active FOG tasks** panel shows tasks queued/running for execution, not future schedules. A previous history entry containing `2 / 0` alone is not proof that FOG stored both schedules. Check for an existing task before repeating an unconfirmed request.
+In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Refresh** button. A successful scheduled submission opens this tab. Recurring tasks show their cron expression and FOG's next-run time explicitly labeled as server time. Read errors keep the last loaded list visible with a warning. Scheduled tasks are displayed read-only; **Cancel selected** remains exclusive to the active-tasks tab.
+
+In FOG itself, open **Task Management → Scheduled Tasks**. A previous history entry containing `2 / 0` alone is not proof that FOG stored both schedules. Check for an existing task before repeating an unconfirmed request.
 
 Existing host associations and previously queued tasks are not changed by this fix. FOG may combine a new single-snapin request with snapin tasks already pending on that host; it does not enqueue all associated snapins merely because another task exists.
 
