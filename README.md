@@ -6,10 +6,11 @@ Built for IT admins running classroom/lab fleets where the same image or snapin 
 
 ## Features
 
+- **French interface in three steps** — select computers, choose an action, then review the execution options and live summary
 - **Multi-select** computers across one or more MeshCentral device groups
 - **Group-aware selection** — pick a group (e.g. `ROOM-H108`) and act on all its Windows hosts
 - **FOG host resolution by MAC** — the plugin looks up each MeshCentral node in FOG via `/fog/host/search` and shows the FOG host id + assigned image
-- **Live online indicator** (`● green` / `○ red`)
+- **Live online indicator** with text and color (green online / gray offline)
 - **Actions**: Deploy image, Capture image, Run snapin
 - **Inline progress and logs**
 - **Task tabs** — switch between active tasks and pending FOG schedules, with dates, host/group names, snapins and FOG IDs
@@ -50,16 +51,18 @@ Built for IT admins running classroom/lab fleets where the same image or snapin 
 ## Usage
 
 1. Open any device, click the **FOG** tab
-2. The status pill at the top shows whether the FOG API is reachable (`FOG OK` or the error)
-3. Pick a group on the left (or stay on *All Windows computers*)
-4. Tick the computers you want to act on
-5. Click **Resolve FOG hosts** — the plugin queries FOG by MAC and shows the matching host + image (or `no FOG host` if FOG doesn't know that MAC)
-6. Pick an action:
-   - **Deploy image** — schedules task type 1 (image down) on each FOG host
-   - **Capture image** — schedules task type 2 (image up). Only meaningful on master/reference machines
-   - **Run snapin** — pick a snapin from the dropdown; the plugin creates a **Single Snapin** task (type 13) for that snapin on each selected host, without adding or changing host snapin associations. This also applies when using **Schedule**.
-7. Click **Run on selected**. A confirmation prompt lists how many FOG hosts will be tasked and how many were skipped (not found in FOG)
-8. Watch the progress counter; click **Logs** for per-host results
+2. The status badge shows whether the FOG API is reachable (**FOG connecté**).
+3. In **Choisir les postes**, pick a group or **Tous les postes**, then tick the computers. Selections persist when changing group or search filters; the summary reports selected computers outside the current filter. Use **Effacer la sélection** to clear them all.
+4. FOG hosts are resolved automatically. **Actualiser les postes FOG** refreshes the matching host and image; an unknown MAC shows **Absent de FOG**.
+5. In **Choisir l’action**, select:
+   - **Déployer une image** — task type 1 (image down), using the selected image or each host's assigned image.
+   - **Capturer une image** — task type 2 (image up), intended for master/reference machines.
+   - **Exécuter un snapin** — a **Single Snapin** task (type 13) for the selected snapin, without adding or changing host associations. This also applies to scheduled execution.
+6. In **Définir l’exécution**, enable **Planifier pour plus tard** if needed and enter the date and time **as shown in FOG**. **Options avancées** contains WoL, shutdown, domain join and host naming. **Modèles d’action** saves or loads reusable settings.
+7. Check the live **Récapitulatif**, click **Exécuter** or **Planifier**, then confirm. The confirmation reports matching FOG hosts and excluded computers. The form is locked while submitting to prevent duplicate clicks.
+8. Follow **Tâches actives** or **Tâches planifiées** below. Select rows to enable **Annuler la sélection**. **Journal** shows per-host results; **Historique** lists previous operations.
+
+The **0.0.41** interface adapts to narrower windows, keeps long device lists scrollable, and shows task states using both text and color. After updating the plugin, reload the FOG panel to load the new interface.
 
 ## How it works
 
@@ -95,7 +98,7 @@ Existing API integrations may still deliberately send an absolute `scheduleTime`
 
 A scheduled operation counts as successful only when FOG returns a task ID and `GET /fog/scheduledtask/{id}` confirms the active task, host, type, timestamp and options. Logs and History show the confirmed task ID for each host, or the verification error. A failed verification never retries creation automatically, because the original task may already exist.
 
-In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Refresh** button. A successful scheduled submission opens this tab. Read errors keep the last loaded list visible with a warning.
+In the plugin, open **Tâches planifiées** to see all active schedules from FOG, including those created outside this plugin. The tab shows the target host/group, task type, snapin name (or ID), planned date, status and FOG ID. It loads on startup, refreshes every eight seconds while visible, and supports the **Actualiser** button. A successful scheduled submission opens this tab. Read errors keep the last loaded list visible with a warning.
 
 The **Date prévue (heure FOG)** column shows FOG's `runtime` text unchanged, matching the FOG management page and the scheduling picker. Recurring schedules show their cron expression and next run in FOG time.
 
@@ -107,7 +110,7 @@ Existing host associations and previously queued tasks are not changed by this f
 
 ## Tests
 
-With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server. Run with `TZ=UTC` and `TZ=Europe/Paris` to verify independence from browser/server timezones. Coverage includes 11:00 input becoming 11:00 in FOG for deploy/capture/snapin, DST transitions, midnight/year boundaries, read-back and rollback failures, cancellation, invalid dates and the immediate Single Snapin behavior.
+With Node.js 18 or later, run `node --test test/*.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server. Run with `TZ=UTC` and `TZ=Europe/Paris` to verify independence from browser/server timezones. Coverage includes 11:00 input becoming 11:00 in FOG for deploy/capture/snapin, DST transitions, midnight/year boundaries, read-back and rollback failures, cancellation, invalid dates and the immediate Single Snapin behavior. Interface tests cover live summaries, action-specific fields, selections across groups, unavailable inputs, duplicate submission prevention and confirmation cancellation.
 
 ## Troubleshooting
 

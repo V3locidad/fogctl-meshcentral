@@ -1,148 +1,175 @@
 <!doctype html>
-<html>
+<html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FOG Control</title>
 <style>
-  html, body { height: 100%; margin: 0; }
-  body { font-family: Segoe UI, Arial, sans-serif; font-size: 13px; padding: 10px; color: #222; box-sizing: border-box; display: flex; flex-direction: column; }
-  h2 { margin: 0 0 10px 0; font-size: 16px; flex: 0 0 auto; }
-  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #f4f4f4; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; flex: 0 0 auto; }
-  .bar input[type=text], .bar select { padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }
-  button { padding: 5px 10px; border: 1px solid #888; background: #fff; border-radius: 3px; cursor: pointer; font-size: 13px; }
-  button.primary { background: #2c7be5; color: white; border-color: #2c7be5; }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cols { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
-  .col { flex: 1; border: 1px solid #ddd; border-radius: 4px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-  .col h3 { margin: 0; padding: 8px; background: #eee; border-bottom: 1px solid #ddd; font-size: 13px; flex: 0 0 auto; }
-  .col .search { flex: 0 0 auto; }
-  .col > div[id$="List"] { flex: 1 1 auto; overflow: auto; min-height: 0; }
-  .col .search { padding: 6px 8px; border-bottom: 1px solid #eee; }
-  .col .search input { width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; }
-  .row { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-  .row:hover { background: #f8f8ff; }
-  .row .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .dot.on { background: #2ecc71; }
-  .dot.off { background: #e74c3c; }
-  .row .fog-status { font-size: 11px; margin-left: auto; padding: 1px 6px; border-radius: 10px; }
-  .fog-status.match { background: #d4edda; color: #155724; }
-  .fog-status.miss  { background: #f8d7da; color: #721c24; }
-  .fog-status.pend  { background: #fff3cd; color: #856404; }
-  .fog-status.ok    { background: #d1ecf1; color: #0c5460; }
-  .fog-status.bad   { background: #f8d7da; color: #721c24; }
-  .fog-status.none  { background: #e2e3e5; color: #383d41; }
-  #logs { margin-top: 10px; background: #111; color: #ddd; font-family: Menlo, Consolas, monospace; font-size: 12px; padding: 8px; border-radius: 4px; height: 220px; min-height: 120px; overflow: auto; white-space: pre-wrap; display: none; resize: vertical; flex: 0 0 auto; }
-  #progress { font-weight: 600; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #eee; font-size: 11px; margin-left: 6px; }
-  #tasksPanel { margin-top: 10px; border: 1px solid #ddd; border-radius: 4px; }
-  #tasksPanel .tphead { padding: 8px; background: #eee; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px; }
-  #tasksPanel .tphead h3 { margin: 0; font-size: 13px; flex: 0 0 auto; }
-  #tasksPanel .tphead .spacer { flex: 1; }
-  #tasksPanel { flex: 0 0 auto; }
-  .task-tabs { display: flex; gap: 4px; }
-  .task-tabs button { background: transparent; border-color: transparent; }
-  .task-tabs button[aria-selected="true"] { background: white; border-color: #2c7be5; color: #195cb5; font-weight: 600; }
-  #tasksPanel table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  #tasksPanel th, #tasksPanel td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-  #tasksPanel th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
-  #scheduledMessage { padding: 6px 8px; color: #666; font-size: 11px; }
-  #scheduledMessage.error { color: #a4262c; }
-  .schedule-date { white-space: nowrap; }
-  .scheduled-details { display: block; color: #666; margin-top: 2px; }
-  #tasksTable .progress-cell { width: 120px; }
-  #tasksTable .progress-bar { background: #eee; border-radius: 3px; overflow: hidden; height: 10px; position: relative; }
-  #tasksTable .progress-fill { background: #2c7be5; height: 100%; transition: width 0.3s; }
-  #tasksTableWrap, #scheduledTableWrap { max-height: 180px; overflow: auto; }
+  :root { color-scheme: light; --ink:#1c2b40; --muted:#617188; --line:#dde5ee; --blue:#205dcc; --soft:#edf4ff; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  html, body { margin:0; min-height:100%; }
+  body { font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:#f4f7fb; padding:18px; }
+  .app { max-width:1800px; margin:auto; }
+  h1,h2,h3,p { margin:0; }
+  h1 { font-size:21px; letter-spacing:-.6px; font-weight:700; }
+  h2 { font-size:14px; font-weight:650; display:flex; align-items:center; gap:9px; }
+  h3 { font-size:12px; font-weight:650; }
+  .muted,.help { color:var(--muted); }
+  .help { font-size:12px; }
+  .app-head { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand-mark { width:39px; height:39px; display:grid; place-items:center; border-radius:10px; color:white; background:var(--blue); font-size:22px; font-weight:750; }
+  .head-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  button,input,select { font:inherit; }
+  button { min-height:33px; padding:6px 11px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:white; cursor:pointer; font-weight:550; }
+  button:hover { background:#f3f6fb; border-color:#b7c7da; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:white; }
+  button.primary:hover { background:#174cac; }
+  button.danger { color:#a82b35; border-color:#e9c8cc; }
+  button.danger:hover { background:#fff1f2; }
+  button:disabled { opacity:.48; cursor:not-allowed; }
+  :focus-visible { outline:3px solid #80abfa; outline-offset:2px; }
+  input[type=checkbox] { accent-color:var(--blue); width:15px; height:15px; margin:0; flex-shrink:0; cursor:pointer; }
+  input[type=text],input[type=search],input[type=datetime-local],select { width:100%; min-width:0; min-height:35px; border:1px solid #cbd6e3; border-radius:6px; background:white; padding:6px 9px; color:var(--ink); }
+  .workspace { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(340px,1fr); gap:16px; align-items:start; }
+  .panel { background:white; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .panel-head { display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--line); }
+  .panel-head .spacer { flex:1; }
+  .step { display:inline-grid; place-items:center; width:23px; height:23px; background:var(--soft); color:var(--blue); border-radius:7px; font-size:12px; font-weight:700; flex-shrink:0; }
+  .selection-panel { display:flex; flex-direction:column; min-height:420px; }
+  .selection-count { color:var(--blue); font-size:12px; font-weight:600; }
+  .cols { display:grid; grid-template-columns:minmax(160px,.7fr) minmax(0,1.5fr); flex:1; min-height:0; }
+  .col { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .groups-col { border-right:1px solid var(--line); background:#fbfcfe; }
+  .col h3 { padding:12px 12px 4px; }
+  .search { padding:7px 12px 10px; }
+  .search input { font-size:12px; }
+  .col > div[id$="List"] { overflow:auto; min-height:220px; height:320px; flex:none; }
+  .row { display:flex; align-items:center; gap:9px; padding:10px 12px; border-bottom:1px solid #eef2f7; min-width:0; }
+  .row:hover { background:#f3f7fd; }
+  .row.selected { background:var(--soft); }
+  button.group-row { width:100%; border:0; border-bottom:1px solid #eef2f7; border-radius:0; text-align:left; font-weight:450; background:transparent; }
+  button.group-row[aria-pressed="true"] { background:var(--soft); color:#164eaf; box-shadow:inset 3px 0 var(--blue); font-weight:650; }
+  .group-name { overflow-wrap:anywhere; flex:1; }
+  label.node-row { cursor:pointer; align-items:flex-start; }
+  .node-row input { margin-top:3px; }
+  .node-main { min-width:0; flex:1; }
+  .node-title { display:flex; align-items:center; gap:7px; font-weight:550; }
+  .node-name { overflow-wrap:anywhere; }
+  .node-detail { display:block; font-size:11px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:3px; }
+  .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .dot.on { background:#25855c; } .dot.off { background:#9caabd; }
+  .node-online { font-size:10px; color:var(--muted); font-weight:400; margin-left:auto; white-space:nowrap; }
+  .select-visible { position:sticky; top:0; background:#fbfcfe; z-index:1; font-size:12px; }
+  .pill { display:inline-block; background:#eaf0f7; color:#52657b; padding:1px 7px; border-radius:12px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge { display:inline-flex; align-items:center; border-radius:5px; padding:3px 7px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge.good { color:#176143; background:#e8f5ed; } .badge.wait { color:#805811; background:#fff4dc; }
+  .badge.info { color:#245ca8; background:#ebf3ff; } .badge.bad { color:#a52a39; background:#fff0f1; }
+  .badge.neutral { color:#596a80; background:#eef2f7; }
+  .empty { text-align:center; color:var(--muted); padding:25px 15px; }
+  .selection-foot { display:flex; justify-content:space-between; align-items:center; gap:12px; border-top:1px solid var(--line); padding:9px 12px; font-size:12px; color:var(--muted); }
+  .text-button { border:0; color:var(--blue); padding:4px 6px; min-height:27px; background:transparent; }
+  .composer { display:flex; flex-direction:column; }
+  fieldset { border:0; margin:0; padding:0; min-width:0; }
+  .composer-section { padding:13px 16px; }
+  .composer-section + .composer-section { border-top:1px solid var(--line); }
+  .fields { display:grid; grid-template-columns:1fr; gap:10px; margin-top:11px; }
+  .field { display:block; min-width:0; }
+  .field > span { display:block; font-size:12px; font-weight:550; margin-bottom:4px; }
+  .check-label { display:flex; gap:9px; align-items:center; cursor:pointer; }
+  .schedule-switch { padding:10px 0 4px; }
+  .schedule-date-wrap { margin-top:9px; }
+  #scheduleTimezone { display:block; font-size:11px; color:var(--muted); margin-top:4px; }
+  details { margin-top:10px; }
+  summary { cursor:pointer; color:#40536a; font-size:12px; padding:5px 0; }
+  .advanced-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:9px 0 2px; font-size:12px; }
+  .template-tools { display:flex; flex-wrap:wrap; gap:6px; padding-top:7px; }
+  .template-tools select { flex:1 1 150px; width:auto; }
+  .review { margin-top:auto; border-top:1px solid var(--line); padding:13px 16px; background:#f8faff; }
+  .review-label { font-size:10px; letter-spacing:1px; color:var(--muted); text-transform:uppercase; font-weight:650; }
+  #operationSummary { font-size:14px; font-weight:600; line-height:1.5; margin:5px 0; overflow-wrap:anywhere; }
+  #summaryDetails { font-size:11px; color:var(--muted); margin-bottom:11px; }
+  #runBtn { width:100%; min-height:38px; }
+  #progress { display:block; font-size:12px; margin-top:7px; color:var(--blue); }
+  #progress:empty { display:none; }
+  #tasksPanel { margin-top:16px; }
+  #tasksPanel .tphead { display:flex; align-items:center; gap:8px; padding:11px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .task-tabs { display:flex; gap:4px; }
+  .task-tabs button { border-color:transparent; color:var(--muted); }
+  .task-tabs button[aria-selected="true"] { color:var(--blue); background:var(--soft); }
+  .task-tabs .pill { margin-left:6px; }
+  .tphead .spacer { flex:1; }
+  #tasksPanel table { width:100%; min-width:650px; border-collapse:collapse; font-size:12px; }
+  #tasksPanel th,#tasksPanel td { padding:9px 14px; border-bottom:1px solid #eef2f7; text-align:left; }
+  #tasksPanel th { position:sticky; top:0; z-index:1; background:#fafbfd; color:var(--muted); font-size:11px; font-weight:550; }
+  #tasksPanel tr:has(input:checked) { background:var(--soft); }
+  #tasksPanel tbody tr:hover { background:#f6f9fe; }
+  #tasksTableWrap,#scheduledTableWrap { max-height:205px; overflow:auto; }
+  #scheduledMessage { font-size:11px; color:var(--muted); padding:7px 14px; }
+  #scheduledMessage.error { color:#a52a39; }
+  .schedule-date { white-space:nowrap; }
+  .scheduled-details { display:block; font-size:11px; color:var(--muted); margin-top:2px; }
+  .progress-cell { min-width:120px; }
+  .progress-bar { width:85px; height:5px; display:inline-block; background:#e5ecf5; border-radius:5px; overflow:hidden; }
+  .progress-fill { background:var(--blue); height:100%; }
+  #logs { display:none; white-space:pre-wrap; overflow:auto; max-height:240px; margin-top:16px; padding:15px; border-radius:9px; font:12px/1.7 Menlo,Consolas,monospace; background:#18263b; color:#dce7f8; }
+  @media(max-width:1000px) { .workspace { grid-template-columns:1fr; } .selection-panel { min-height:350px; } .col > div[id$="List"] { height:270px; flex:none; } .composer .fields { grid-template-columns:1fr 1fr; } }
+  @media(max-width:580px) { body { padding:10px; } .app-head { align-items:flex-start; flex-direction:column; gap:10px; } .brand-mark { display:none; } .cols { grid-template-columns:1fr; } .groups-col { border-right:0; border-bottom:1px solid var(--line); } .groups-col > div[id$="List"] { height:120px; min-height:100px; } .composer .fields,.advanced-grid { grid-template-columns:1fr; } .panel-head { flex-wrap:wrap; } .task-tabs button { padding:6px; font-size:12px; } .tphead .spacer { display:none; } #tasksPanel th,#tasksPanel td { padding:8px; } }
 </style>
 </head>
 <body>
-<h2>FOG Control <span id="cfgState" class="pill">checking…</span></h2>
-
-<div class="bar">
-  <strong>Action:</strong>
-  <select id="actionSel">
-    <option value="deploy">Deploy image</option>
-    <option value="capture">Capture image</option>
-    <option value="snapin">Run snapin</option>
-  </select>
-  <span id="imageWrap" style="display:none">
-    Image: <select id="imageSel"><option value="">Default (per host)</option></select>
-  </span>
-  <span id="snapinWrap" style="display:none">
-    Snapin: <select id="snapinSel"><option>loading…</option></select>
-  </span>
-  <button id="lookupBtn" title="Force re-resolve">Refresh FOG hosts</button>
-  <label style="margin-left:8px" title="Send a Wake-on-LAN magic packet before the task — useful for offline hosts"><input type="checkbox" id="optWol"> WoL</label>
-  <label title="Shut down the host after the task completes"><input type="checkbox" id="optShutdown"> Shutdown after</label>
-  <label style="margin-left:8px"><input type="checkbox" id="scheduleOn"> Schedule</label>
-  <input type="datetime-local" id="scheduleAt" disabled style="opacity:0.5">
-  <small id="scheduleTimezone" hidden></small>
-  <label style="margin-left:8px" title="Set useAD=1 on each host before the task (fill AD fields from server config if empty)"><input type="checkbox" id="optJoinAd"> Join domain</label>
-  <label title="Set enforce=1 on each host before the task (force name change / AD join reboot)"><input type="checkbox" id="optForceName"> Force name change</label>
-  <button id="runBtn" class="primary">Run on selected</button>
-  <span id="progress"></span>
-  <span style="margin-left:auto">
-    <select id="tplSel" title="Charger un template"><option value="">— Templates —</option></select>
-    <button id="tplSaveBtn" title="Sauver les options courantes comme template">💾</button>
-    <button id="tplDelBtn" title="Supprimer le template sélectionné">🗑️</button>
-    <button id="historyBtn" title="Historique des déploiements">🕘 Historique</button>
-    <button id="logsBtn">Logs</button>
-  </span>
-</div>
-
-<div id="tasksPanel">
-  <div class="tphead">
-    <div class="task-tabs" role="tablist" aria-label="Tâches FOG">
-      <button id="activeTasksTab" role="tab" aria-selected="true" aria-controls="activeTasksPane" tabindex="0">Tâches actives <span id="taskCount" class="pill">0</span></button>
-      <button id="scheduledTasksTab" role="tab" aria-selected="false" aria-controls="scheduledTasksPane" tabindex="-1">Tâches planifiées <span id="scheduledCount" class="pill">—</span></button>
+<div class="app">
+  <header class="app-head">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">F</span><div><h1>FOG Control</h1><p class="help">Déployez et suivez vos tâches depuis MeshCentral.</p></div></div>
+    <div class="head-actions"><span id="cfgState" class="badge neutral" role="status">Connexion à FOG…</span><button id="historyBtn">Historique</button><button id="logsBtn" aria-controls="logs" aria-expanded="false">Journal</button></div>
+  </header>
+  <main class="workspace">
+    <section class="panel selection-panel" aria-labelledby="selectionTitle">
+      <div class="panel-head"><h2 id="selectionTitle"><span class="step">1</span> Choisir les postes</h2><span class="spacer"></span><span id="selectionCount" class="selection-count" aria-live="polite">Aucun poste sélectionné</span></div>
+      <div class="cols">
+        <div class="col groups-col"><h3>Groupes</h3><div class="search"><input type="search" id="groupSearch" aria-label="Rechercher un groupe" placeholder="Rechercher un groupe…"></div><div id="groupList"></div></div>
+        <div class="col"><h3>Postes <span id="countLabel" class="pill"></span></h3><div class="search"><input type="search" id="nodeSearch" aria-label="Rechercher un poste" placeholder="Rechercher un poste…"></div><div id="nodeList"></div></div>
+      </div>
+      <div class="selection-foot"><button id="lookupBtn" class="text-button" title="Actualiser les correspondances des postes avec FOG">Actualiser les postes FOG</button><button id="clearSelectionBtn" class="text-button" disabled>Effacer la sélection</button></div>
+    </section>
+    <section class="panel composer" aria-label="Préparer une tâche">
+      <fieldset id="composerFields" aria-label="Paramètres de la tâche">
+        <div class="composer-section">
+          <h2><span class="step">2</span> Choisir l’action</h2>
+          <div class="fields">
+            <label class="field" for="actionSel"><span>Action</span><select id="actionSel"><option value="deploy">Déployer une image</option><option value="capture">Capturer une image</option><option value="snapin">Exécuter un snapin</option></select></label>
+            <label id="imageWrap" class="field" for="imageSel"><span>Image</span><select id="imageSel"><option value="">Image attribuée à chaque poste</option></select></label>
+            <label id="snapinWrap" class="field" for="snapinSel" hidden><span>Snapin</span><select id="snapinSel"><option value="">Chargement…</option></select></label>
+          </div>
+          <p id="actionHelp" class="help" style="margin-top:8px"></p>
+          <details><summary>Modèles d’action</summary><div class="template-tools"><select id="tplSel" aria-label="Charger un modèle"><option value="">Choisir un modèle…</option></select><button id="tplSaveBtn" title="Enregistrer les réglages actuels comme modèle">Enregistrer</button><button id="tplDelBtn" title="Supprimer le modèle sélectionné">Supprimer</button></div></details>
+        </div>
+        <div class="composer-section">
+          <h2><span class="step">3</span> Définir l’exécution</h2>
+          <label class="check-label schedule-switch"><input type="checkbox" id="scheduleOn"> Planifier pour plus tard</label>
+          <div id="scheduleFields" class="schedule-date-wrap" hidden><label class="field"><span>Date et heure FOG</span><input type="datetime-local" id="scheduleAt" disabled aria-describedby="scheduleTimezone"></label><small id="scheduleTimezone" hidden></small></div>
+          <details id="advancedOptions"><summary>Options avancées <span id="advancedCount" class="pill" hidden></span></summary><div class="advanced-grid">
+            <label class="check-label"><input type="checkbox" id="optWol"> Réveiller les postes (WoL)</label>
+            <label class="check-label"><input type="checkbox" id="optShutdown"> Éteindre après exécution</label>
+            <label class="check-label"><input type="checkbox" id="optJoinAd"> Joindre le domaine</label>
+            <label class="check-label"><input type="checkbox" id="optForceName"> Appliquer le nom du poste</label>
+          </div></details>
+        </div>
+      </fieldset>
+      <div class="review"><div class="review-label">Récapitulatif</div><p id="operationSummary" aria-live="polite">Sélectionnez les postes à préparer.</p><p id="summaryDetails"></p><button id="runBtn" class="primary" disabled>Exécuter sur les postes sélectionnés</button><span id="progress" role="status" aria-live="polite"></span></div>
+    </section>
+  </main>
+  <section id="tasksPanel" class="panel" aria-label="Suivi des tâches FOG">
+    <div class="tphead">
+      <div class="task-tabs" role="tablist" aria-label="Tâches FOG"><button id="activeTasksTab" role="tab" aria-selected="true" aria-controls="activeTasksPane" tabindex="0">Tâches actives <span id="taskCount" class="pill">0</span></button><button id="scheduledTasksTab" role="tab" aria-selected="false" aria-controls="scheduledTasksPane" tabindex="-1">Tâches planifiées <span id="scheduledCount" class="pill">—</span></button></div>
+      <span class="spacer"></span><button id="refreshTasksBtn">Actualiser</button><button id="cancelTasksBtn" class="danger" disabled>Annuler la sélection</button><button id="cancelScheduledBtn" class="danger" hidden disabled>Annuler la sélection</button>
     </div>
-    <span class="spacer"></span>
-    <button id="refreshTasksBtn">Refresh</button>
-    <button id="cancelTasksBtn" class="primary">Cancel selected</button>
-    <button id="cancelScheduledBtn" class="primary" hidden disabled>Annuler la sélection</button>
-  </div>
-  <div id="activeTasksPane" role="tabpanel" aria-labelledby="activeTasksTab">
-   <div id="tasksTableWrap">
-    <table id="tasksTable">
-      <thead>
-        <tr>
-          <th style="width:30px"><input type="checkbox" id="taskCheckAll"></th>
-          <th>Host</th>
-          <th>Type</th>
-          <th>State</th>
-          <th class="progress-cell">Progress</th>
-          <th>Task ID</th>
-        </tr>
-      </thead>
-      <tbody id="tasksBody"></tbody>
-    </table>
-   </div>
-  </div>
-  <div id="scheduledTasksPane" role="tabpanel" aria-labelledby="scheduledTasksTab" hidden>
-    <div id="scheduledMessage" role="status" aria-live="polite"></div>
-    <div id="scheduledTableWrap">
-      <table id="scheduledTable">
-        <thead><tr><th><input type="checkbox" id="scheduledCheckAll" aria-label="Sélectionner toutes les tâches planifiées"></th><th>Poste / groupe</th><th>Type / snapin</th><th>Date prévue (heure FOG)</th><th>État</th><th>ID FOG</th></tr></thead>
-        <tbody id="scheduledBody"></tbody>
-      </table>
-    </div>
-  </div>
+    <div id="activeTasksPane" role="tabpanel" aria-labelledby="activeTasksTab"><div id="tasksTableWrap"><table id="tasksTable"><thead><tr><th style="width:32px"><input type="checkbox" id="taskCheckAll" aria-label="Sélectionner toutes les tâches actives"></th><th>Poste</th><th>Type</th><th>État</th><th class="progress-cell">Progression</th><th>ID FOG</th></tr></thead><tbody id="tasksBody"></tbody></table></div></div>
+    <div id="scheduledTasksPane" role="tabpanel" aria-labelledby="scheduledTasksTab" hidden><div id="scheduledMessage" role="status" aria-live="polite"></div><div id="scheduledTableWrap"><table id="scheduledTable"><thead><tr><th style="width:32px"><input type="checkbox" id="scheduledCheckAll" aria-label="Sélectionner toutes les tâches planifiées"></th><th>Poste / groupe</th><th>Type / snapin</th><th>Date prévue (heure FOG)</th><th>État</th><th>ID FOG</th></tr></thead><tbody id="scheduledBody"></tbody></table></div></div>
+  </section>
+  <div id="logs" aria-label="Journal des opérations" style="display:none"></div>
 </div>
-
-<div class="cols">
-  <div class="col">
-    <h3>Groups</h3>
-    <div class="search"><input id="groupSearch" placeholder="Filter groups…"></div>
-    <div id="groupList"></div>
-  </div>
-  <div class="col">
-    <h3>Computers <span id="countLabel" class="pill"></span></h3>
-    <div class="search"><input id="nodeSearch" placeholder="Filter computers…"></div>
-    <div id="nodeList"></div>
-  </div>
-</div>
-
-<div id="logs"></div>
 
 <script>
 (function () {
@@ -169,7 +196,9 @@
     cancellingScheduled: false,
     fogTimezone: null,
     fogClockOffset: 0,
-    scheduleInfoError: ''
+    scheduleInfoError: '',
+    runBusy: false,
+    fogConnected: false
   };
 
   function $(id) { return document.getElementById(id); }
@@ -179,7 +208,10 @@
     el.textContent += '[' + t + '] ' + msg + '\n';
     el.scrollTop = el.scrollHeight;
   }
-  function showLogs(v) { $('logs').style.display = v ? 'block' : 'none'; }
+  function showLogs(v) {
+    $('logs').style.display = v ? 'block' : 'none';
+    $('logsBtn').setAttribute('aria-expanded', String(v));
+  }
 
   // ---- access the MeshCentral nodes/meshes datastructure in the parent frame ----
   function getMeshes() {
@@ -246,16 +278,103 @@
     state.nodes = nList;
   }
 
+  function taskTypeLabel(label) {
+    return { Deploy: 'Déploiement', Capture: 'Capture', Multicast: 'Multidiffusion', Snapin: 'Snapins', 'All Snapins': 'Tous les snapins', 'Single Snapin': 'Snapin individuel' }[label] || label;
+  }
+
+  function taskStatus(label) {
+    var labels = {
+      queued: ['En attente', 'wait'], 'in-progress': ['En cours', 'info'], 'in progress': ['En cours', 'info'],
+      running: ['En cours', 'info'], complete: ['Terminée', 'good'], completed: ['Terminée', 'good'],
+      cancelled: ['Annulée', 'neutral'], canceled: ['Annulée', 'neutral'], 'checked in': ['Prise en charge', 'info'],
+      failed: ['Échec', 'bad'], error: ['Erreur', 'bad'], 'on hold': ['En pause', 'wait'],
+      'en attente': ['En attente', 'wait'], 'échéance atteinte': ['Échéance atteinte', 'wait'], 'récurrente': ['Récurrente', 'info']
+    };
+    var status = labels[String(label).toLowerCase()] || [label || 'État inconnu', 'neutral'];
+    return '<span class="badge ' + status[1] + '">' + escapeHtml(status[0]) + '</span>';
+  }
+
+  function chosenItem() {
+    var action = $('actionSel').value;
+    var select = $(action === 'snapin' ? 'snapinSel' : 'imageSel');
+    if (action === 'capture') return '';
+    if (action === 'deploy' && !select.value) return 'l’image attribuée à chaque poste';
+    var item = (action === 'snapin' ? state.snapins : state.images).find(function (it) { return String(it.id) === select.value; });
+    return item ? item.name : (action === 'snapin' ? 'le snapin sélectionné' : 'l’image sélectionnée');
+  }
+
+  function executionSummary(count) {
+    var action = $('actionSel').value;
+    var text = action === 'capture' ? 'Capturer une image' : (action === 'snapin' ? 'Exécuter ' : 'Déployer ') + chosenItem();
+    text += ' sur ' + count + ' poste' + (count > 1 ? 's' : '');
+    if ($('scheduleOn').checked) {
+      var parts = $('scheduleAt').value.split('T');
+      var date = (parts[0] || '').split('-').reverse().join('/');
+      text += parts[1] ? ' · le ' + date + ' à ' + parts[1] + ' — heure FOG (' + state.fogTimezone + ')' : ' · date FOG à choisir';
+    } else text += ' · dès que possible';
+    return text;
+  }
+
+  function updateSummary() {
+    var ids = selectedNodeIds();
+    var visible = {};
+    visibleNodes().forEach(function (n) { visible[n.id] = true; });
+    var pending = 0, matched = 0, hidden = 0;
+    ids.forEach(function (id) {
+      if (state.fogMap[id] === undefined) pending++;
+      else if (state.fogMap[id]) matched++;
+      if (!visible[id]) hidden++;
+    });
+    var missing = ids.length - pending - matched;
+    $('selectionCount').textContent = ids.length ? ids.length + ' poste' + (ids.length > 1 ? 's sélectionnés' : ' sélectionné') : 'Aucun poste sélectionné';
+    $('operationSummary').textContent = ids.length ? executionSummary(ids.length) : 'Sélectionnez les postes à préparer.';
+    var details = [];
+    if (ids.length) details.push(matched + ' poste' + (matched > 1 ? 's reconnus' : ' reconnu') + ' par FOG');
+    if (pending) details.push(pending + ' à vérifier');
+    if (missing) details.push(missing + (missing > 1 ? ' absents de FOG, exclus' : ' absent de FOG, exclu') + ' de l’exécution');
+    if (hidden) details.push(hidden + (hidden > 1 ? ' sélectionnés' : ' sélectionné') + ' hors du filtre actuel');
+    var options = [];
+    [['optWol', 'réveil WoL'], ['optShutdown', 'extinction après exécution'], ['optJoinAd', 'jonction au domaine'], ['optForceName', 'application du nom']].forEach(function (o) { if ($(o[0]).checked) options.push(o[1]); });
+    if (options.length) details.push('Options : ' + options.join(', '));
+    $('summaryDetails').textContent = details.length ? details.join(' · ') : 'Choisissez un groupe, puis cochez les postes concernés.';
+    $('advancedCount').hidden = !options.length;
+    $('advancedCount').textContent = options.length;
+    $('clearSelectionBtn').disabled = !ids.length || state.runBusy;
+    $('composerFields').disabled = state.runBusy;
+    var scheduled = $('scheduleOn').checked;
+    var blocked = !ids.length || (!matched && !pending) || !state.fogConnected || (scheduled && (!state.fogTimezone || !$('scheduleAt').value)) || ($('actionSel').value === 'snapin' && !$('snapinSel').value);
+    $('runBtn').disabled = state.runBusy || blocked;
+    $('runBtn').textContent = state.runBusy ? 'Envoi en cours…' : (scheduled ? 'Planifier' : 'Exécuter') + (ids.length ? ' sur ' + ids.length + ' poste' + (ids.length > 1 ? 's' : '') : ' sur les postes sélectionnés');
+    var all = $('checkAll');
+    if (all) {
+      var shown = visibleNodes();
+      var checked = shown.filter(function (n) { return state.checkedNodes[n.id]; }).length;
+      all.checked = shown.length > 0 && checked === shown.length;
+      all.indeterminate = checked > 0 && checked < shown.length;
+    }
+  }
+
+  function updateActionUI() {
+    var action = $('actionSel').value;
+    $('snapinWrap').hidden = action !== 'snapin';
+    $('imageWrap').hidden = action !== 'deploy';
+    $('actionHelp').textContent = {
+      deploy: 'Installe l’image choisie sur les postes sélectionnés.',
+      capture: 'Enregistre le contenu du poste dans son image attribuée dans FOG.',
+      snapin: 'Exécute uniquement ce snapin sur les postes sélectionnés.'
+    }[action];
+    updateSummary();
+  }
+
   function renderGroups() {
     var filter = $('groupSearch').value.toLowerCase();
     var html = '';
-    html += '<div class="row" data-gid="__all__"><b>All Windows computers</b><span class="pill">' + state.nodes.length + '</span></div>';
+    html += '<button class="row group-row" data-gid="__all__" aria-pressed="' + !state.selectedGroup + '"><span class="group-name">Tous les postes</span><span class="pill">' + state.nodes.length + '</span></button>';
     state.groups.forEach(function (g) {
       if (filter && g.name.toLowerCase().indexOf(filter) === -1) return;
       var count = state.nodes.filter(function (n) { return n.meshid === g.id; }).length;
       if (!count) return;
-      var sel = (state.selectedGroup === g.id) ? ' style="background:#eef6ff"' : '';
-      html += '<div class="row" data-gid="' + g.id + '"' + sel + '>' + escapeHtml(g.name) + '<span class="pill">' + count + '</span></div>';
+      html += '<button class="row group-row" data-gid="' + escapeHtml(g.id) + '" aria-pressed="' + (state.selectedGroup === g.id) + '"><span class="group-name">' + escapeHtml(g.name) + '</span><span class="pill">' + count + '</span></button>';
     });
     $('groupList').innerHTML = html;
     [].slice.call($('groupList').querySelectorAll('.row')).forEach(function (el) {
@@ -281,46 +400,38 @@
   function renderNodes() {
     var arr = visibleNodes();
     $('countLabel').textContent = arr.length;
-    var html = '<div class="row" style="background:#fafafa"><input type="checkbox" id="checkAll"> <b>Select all visible</b></div>';
+    var html = '<label class="row select-visible"><input type="checkbox" id="checkAll"' + (state.runBusy || !arr.length ? ' disabled' : '') + '> Sélectionner les postes affichés</label>';
     arr.forEach(function (n) {
-      var ck = state.checkedNodes[n.id] ? ' checked' : '';
+      var checked = !!state.checkedNodes[n.id];
       var fog = state.fogMap[n.id];
-      var status = '';
-      if (fog === undefined) status = '<span class="fog-status none">…</span>';
-      else if (fog === null) status = '<span class="fog-status miss">no FOG host</span>';
-      else status = '<span class="fog-status match">FOG #' + fog.id + (fog.image ? ' • ' + escapeHtml(fog.image) : '') + '</span>';
+      var detail = fog === undefined ? 'Correspondance FOG à vérifier' : (fog === null ? 'Absent de FOG' : 'FOG #' + fog.id + (fog.image ? ' · ' + fog.image : ''));
       var task = state.taskMap[n.id];
-      var taskBadge = '';
-      if (task) {
-        var pct = (task.percent != null) ? (' ' + task.percent + '%') : '';
-        taskBadge = '<span class="fog-status pend">' + escapeHtml(task.label + pct) + '</span>';
-      }
-      html += '<div class="row" data-nid="' + n.id + '">'
-            + '<input type="checkbox" data-nid="' + n.id + '"' + ck + '>'
-            + '<span class="dot ' + (n.online ? 'on' : 'off') + '"></span>'
-            + escapeHtml(n.name)
-            + status
-            + taskBadge
-            + '</div>';
+      if (task) detail += ' · ' + taskTypeLabel(task.label) + (task.percent != null ? ' ' + task.percent + '%' : '');
+      html += '<label class="row node-row' + (checked ? ' selected' : '') + '">'
+        + '<input type="checkbox" data-nid="' + escapeHtml(n.id) + '" aria-label="Sélectionner ' + escapeHtml(n.name) + '"' + (checked ? ' checked' : '') + (state.runBusy ? ' disabled' : '') + '>'
+        + '<span class="node-main"><span class="node-title"><span class="dot ' + (n.online ? 'on' : 'off') + '" aria-hidden="true"></span><span class="node-name">' + escapeHtml(n.name) + '</span><span class="node-online">' + (n.online ? 'En ligne' : 'Hors ligne') + '</span></span>'
+        + '<span class="node-detail" title="' + escapeHtml(detail) + '">' + escapeHtml(detail) + '</span></span></label>';
     });
+    if (!arr.length) html += '<p class="empty">Aucun poste ne correspond à votre recherche.</p>';
     $('nodeList').innerHTML = html;
-    [].slice.call($('nodeList').querySelectorAll('input[type=checkbox][data-nid]')).forEach(function (cb) {
-      cb.onclick = function (ev) {
-        ev.stopPropagation();
-        var nid = cb.getAttribute('data-nid');
-        if (cb.checked) state.checkedNodes[nid] = true;
-        else delete state.checkedNodes[nid];
+    [].slice.call($('nodeList').querySelectorAll('input[data-nid]')).forEach(function (cb) {
+      cb.onchange = function () {
+        var id = cb.getAttribute('data-nid');
+        if (cb.checked) state.checkedNodes[id] = true;
+        else delete state.checkedNodes[id];
+        cb.closest('label').classList.toggle('selected', cb.checked);
+        updateSummary();
       };
     });
-    var ca = $('checkAll');
-    if (ca) ca.onclick = function () {
-      var ck = ca.checked;
+    $('checkAll').onchange = function () {
+      var checked = this.checked;
       arr.forEach(function (n) {
-        if (ck) state.checkedNodes[n.id] = true;
+        if (checked) state.checkedNodes[n.id] = true;
         else delete state.checkedNodes[n.id];
       });
       renderNodes();
     };
+    updateSummary();
   }
 
   function escapeHtml(s) {
@@ -359,7 +470,7 @@
     });
     if (!items.length) return Promise.resolve();
     var total = items.length;
-    log('Resolving ' + total + ' node(s) against FOG…');
+    log('Recherche de ' + total + ' poste(s) dans FOG…');
 
     var chunks = [];
     for (var i = 0; i < items.length; i += 50) chunks.push(items.slice(i, i + 50));
@@ -379,13 +490,13 @@
         renderNodes();
       }).catch(function (e) {
         failed += chunk.length;
-        log('lookup chunk failed: ' + (e && e.message ? e.message : e));
+        log('Échec de recherche : ' + (e && e.message ? e.message : e));
       });
     }
 
     return chunks.reduce(function (p, c) { return p.then(function () { return runChunk(c); }); }, Promise.resolve())
       .then(function () {
-        log('FOG: ' + matched + '/' + total + ' matched' + (failed ? ' (' + failed + ' failed)' : '') + '.');
+        log('FOG : ' + matched + '/' + total + ' poste(s) reconnus' + (failed ? ' (' + failed + ' échec(s))' : '') + '.');
       });
   }
 
@@ -425,6 +536,15 @@
     }).catch(function () { /* silent */ });
   }
 
+  function updateActiveSelection() {
+    var count = Object.keys(state.checkedTasks).length;
+    $('cancelTasksBtn').disabled = !count;
+    $('cancelTasksBtn').textContent = 'Annuler la sélection' + (count ? ' (' + count + ')' : '');
+    $('taskCheckAll').checked = state.tasksList.length > 0 && count === state.tasksList.length;
+    $('taskCheckAll').indeterminate = count > 0 && count < state.tasksList.length;
+    $('taskCheckAll').disabled = !state.tasksList.length;
+  }
+
   function renderTasks() {
     $('taskCount').textContent = state.tasksList.length;
     // Prune checked entries that are no longer running.
@@ -440,21 +560,22 @@
         ? '<div class="progress-bar"><div class="progress-fill" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div>'
         : '<span style="color:#888">' + escapeHtml(pctText) + '</span>';
       return '<tr>'
-        + '<td><input type="checkbox" data-tid="' + escapeHtml(t.taskId) + '"' + ck + '></td>'
-        + '<td>' + escapeHtml(t.hostName || ('host #' + (t.hostId || '?'))) + '</td>'
-        + '<td>' + escapeHtml(t.label) + '</td>'
-        + '<td>' + escapeHtml(t.stateName || ('state ' + t.state)) + '</td>'
+        + '<td><input type="checkbox" aria-label="Sélectionner la tâche active #' + escapeHtml(t.taskId) + '" data-tid="' + escapeHtml(t.taskId) + '"' + ck + '></td>'
+        + '<td>' + escapeHtml(t.hostName || ('Poste #' + (t.hostId || '?'))) + '</td>'
+        + '<td>' + escapeHtml(taskTypeLabel(t.label)) + '</td>'
+        + '<td>' + taskStatus(t.stateName || ('État ' + t.state)) + '</td>'
         + '<td class="progress-cell">' + pctBar + (pct != null ? ' <small>' + pctText + '</small>' : '') + '</td>'
         + '<td>#' + escapeHtml(t.taskId) + '</td>'
         + '</tr>';
     }).join('');
-    $('tasksBody').innerHTML = rows || '<tr><td colspan="6" style="text-align:center;color:#888;padding:10px">No active tasks</td></tr>';
+    $('tasksBody').innerHTML = rows || '<tr><td colspan="6" class="empty">Aucune tâche active.</td></tr>';
 
     [].slice.call($('tasksBody').querySelectorAll('input[type=checkbox][data-tid]')).forEach(function (cb) {
       cb.onclick = function () {
         var tid = cb.getAttribute('data-tid');
         if (cb.checked) state.checkedTasks[tid] = true;
         else delete state.checkedTasks[tid];
+        updateActiveSelection();
       };
     });
     var all = $('taskCheckAll');
@@ -469,6 +590,7 @@
         renderTasks();
       };
     }
+    updateActiveSelection();
   }
 
   function fogDateInput(timestamp, zone) {
@@ -482,6 +604,7 @@
 
   function updateScheduleTimezone() {
     var on = $('scheduleOn').checked;
+    $('scheduleFields').hidden = !on;
     $('scheduleTimezone').hidden = !on;
     $('scheduleTimezone').textContent = state.fogTimezone ? 'Heure FOG : ' + state.fogTimezone : (state.scheduleInfoError || 'Chargement du fuseau FOG…');
     $('scheduleAt').disabled = !on || !state.fogTimezone;
@@ -490,6 +613,7 @@
       var next = Math.ceil((Date.now() + state.fogClockOffset + 3600000) / 900000) * 900000;
       $('scheduleAt').value = fogDateInput(next, state.fogTimezone);
     }
+    updateSummary();
   }
 
   function loadScheduleInfo() {
@@ -528,7 +652,7 @@
     message.className = state.scheduledError ? 'error' : '';
     message.textContent = state.scheduledError
       ? 'Actualisation impossible : ' + state.scheduledError + (state.scheduledLoaded ? ' — Dernières données conservées.' : '')
-      : (state.scheduledLoading ? 'Chargement…' : 'Dates et heures FOG, comme dans le champ Schedule.');
+      : (state.scheduledLoading ? 'Chargement…' : 'Dates et heures de votre serveur FOG.');
     var rows = state.scheduledList.map(function (t) {
       var target = t.targetName || ((t.isGroup ? 'Groupe #' : 'Poste #') + t.targetId);
       if (t.isGroup && t.targetName) target = 'Groupe : ' + target;
@@ -549,9 +673,9 @@
       return '<tr title="' + escapeHtml(t.name) + '">'
         + '<td><input type="checkbox" data-scheduled-id="' + escapeHtml(t.taskId) + '" aria-label="Sélectionner la tâche planifiée #' + escapeHtml(t.taskId) + '"' + checked + disabled + '></td>'
         + '<td>' + escapeHtml(target) + '</td>'
-        + '<td>' + escapeHtml(t.label) + details + '</td>'
+        + '<td>' + escapeHtml(taskTypeLabel(t.label)) + details + '</td>'
         + '<td class="schedule-date">' + escapeHtml(t.runtime || 'Date indisponible') + '</td>'
-        + '<td>' + escapeHtml(status) + '</td>'
+        + '<td>' + taskStatus(status) + '</td>'
         + '<td>#' + escapeHtml(t.taskId) + '</td></tr>';
     }).join('');
     var empty = state.scheduledError ? 'Liste indisponible.' : (state.scheduledLoaded ? 'Aucune tâche planifiée en attente.' : 'Chargement…');
@@ -616,7 +740,7 @@
         }
       });
       log('Annulation des planifications : ' + ok + ' OK, ' + ko + ' échec(s).');
-      if (ko) alert(ko + ' annulation(s) non confirmée(s). Consultez les Logs.');
+      if (ko) alert(ko + ' annulation(s) non confirmée(s). Consultez le journal.');
     }).catch(function (e) {
       log('Annulation des planifications impossible : ' + e.message);
       alert('Annulation impossible : ' + e.message);
@@ -660,9 +784,9 @@
 
   function cancelSelectedTasks() {
     var ids = Object.keys(state.checkedTasks);
-    if (!ids.length) { alert('No task selected.'); return; }
-    if (!confirm('Cancel ' + ids.length + ' task(s)?')) return;
-    log('Cancelling ' + ids.length + ' task(s)…');
+    if (!ids.length) { alert('Sélectionnez au moins une tâche.'); return; }
+    if (!confirm('Annuler les ' + ids.length + ' tâche(s) sélectionnée(s) ?')) return;
+    log('Annulation de ' + ids.length + ' tâche(s)…');
     api('cancel', { taskIds: ids.join(',') }).then(function (r) {
       if (r && r.results) {
         var ok = 0, ko = 0;
@@ -670,28 +794,30 @@
           if (r.results[tid].ok) ok++;
           else { ko++; log('  ' + tid + ': ' + r.results[tid].error); }
         });
-        log('Cancel done. ' + ok + ' ok, ' + ko + ' failed.');
+        log('Annulation terminée : ' + ok + ' OK, ' + ko + ' échec(s).');
       } else if (r && r.error) {
-        log('Cancel error: ' + r.error);
+        log('Erreur d’annulation : ' + r.error);
       }
       state.checkedTasks = {};
+      updateActiveSelection();
       pollActiveTasks();
-    }).catch(function (e) { log('Cancel request failed: ' + e.message); });
+    }).catch(function (e) { log('Échec de l’annulation : ' + e.message); });
   }
 
   function loadImages() {
     return api('imageList').then(function (r) {
       state.images = r.images || [];
       var sel = $('imageSel');
-      // Preserve the "Default (per host)" entry.
-      sel.innerHTML = '<option value="">Default (per host)</option>';
+      // Preserve the "Image attribuée à chaque poste" entry.
+      sel.innerHTML = '<option value="">Image attribuée à chaque poste</option>';
       state.images.forEach(function (im) {
         var o = document.createElement('option');
         o.value = im.id;
         o.textContent = im.name + (im.os ? ' (' + im.os + ')' : '');
         sel.appendChild(o);
       });
-    }).catch(function (e) { log('imageList failed: ' + e.message); });
+      updateSummary();
+    }).catch(function (e) { log('Chargement des images impossible : ' + e.message); });
   }
 
   function loadSnapins() {
@@ -700,7 +826,8 @@
       var sel = $('snapinSel');
       sel.innerHTML = '';
       if (!state.snapins.length) {
-        sel.innerHTML = '<option value="">(no snapin)</option>';
+        sel.innerHTML = '<option value="">Aucun snapin disponible</option>';
+        updateSummary();
         return;
       }
       state.snapins.forEach(function (s) {
@@ -710,7 +837,8 @@
         sel.appendChild(o);
       });
       if (state.scheduledLoaded) renderScheduledTasks();
-    }).catch(function (e) { log('snapinList failed: ' + e.message); });
+      updateSummary();
+    }).catch(function (e) { log('Chargement des snapins impossible : ' + e.message); });
   }
 
   function snapshotOptions() {
@@ -734,6 +862,7 @@
     $('optShutdown').checked  = !!o.shutdown;
     $('optJoinAd').checked    = !!o.joinAd;
     $('optForceName').checked = !!o.forceName;
+    updateSummary();
   }
   function loadTemplates() {
     api('templates').then(function (r) {
@@ -747,7 +876,7 @@
     });
   }
   function saveCurrentAsTemplate() {
-    var name = prompt('Nom du template :');
+    var name = prompt('Nom du modèle :');
     if (!name) return;
     var tpl = snapshotOptions();
     tpl.name = name;
@@ -758,8 +887,8 @@
   }
   function deleteSelectedTemplate() {
     var id = $('tplSel').value;
-    if (!id) return alert('Aucun template sélectionné.');
-    if (!confirm('Supprimer ce template ?')) return;
+    if (!id) return alert('Aucun modèle sélectionné.');
+    if (!confirm('Supprimer ce modèle ?')) return;
     api('deleteTemplate', { id: id }).then(function (r) {
       if (r.error) return alert('Erreur : ' + r.error);
       loadTemplates();
@@ -783,7 +912,7 @@
         html += '<table style="width:100%;border-collapse:collapse;color:#eee"><thead><tr style="text-align:left">'
               + '<th style="padding:4px;border-bottom:1px solid #555">Quand</th>'
               + '<th style="padding:4px;border-bottom:1px solid #555">Action</th>'
-              + '<th style="padding:4px;border-bottom:1px solid #555">Hosts</th>'
+              + '<th style="padding:4px;border-bottom:1px solid #555">Postes</th>'
               + '<th style="padding:4px;border-bottom:1px solid #555">OK/KO</th>'
               + '<th style="padding:4px;border-bottom:1px solid #555">Options</th>'
               + '</tr></thead><tbody>';
@@ -794,7 +923,7 @@
           else if (e.scheduledFor) opts.push('sched=' + e.scheduledFor);
           Object.keys(e.results || {}).forEach(function (hostId) {
             var result = e.results[hostId];
-            if (result.scheduledTaskId) opts.push(hostId + ': scheduled #' + result.scheduledTaskId);
+            if (result.scheduledTaskId) opts.push(hostId + ': planification #' + result.scheduledTaskId);
             if (result.error) opts.push(hostId + ': ' + result.error);
           });
           if (e.overrideImg) opts.push('img=' + e.overrideImg);
@@ -803,7 +932,7 @@
           if (e.shutdown) opts.push('shutdown');
           html += '<tr>'
                 + '<td style="padding:4px;border-bottom:1px solid #333;white-space:nowrap">' + new Date(e.ts).toLocaleString() + '</td>'
-                + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.kind || '?') + '</td>'
+                + '<td style="padding:4px;border-bottom:1px solid #333">' + escapeHtml({ deploy: 'Déploiement', capture: 'Capture', snapin: 'Snapin' }[e.kind] || e.kind || '?') + '</td>'
                 + '<td style="padding:4px;border-bottom:1px solid #333">' + (e.hostIds || []).length + '</td>'
                 + '<td style="padding:4px;border-bottom:1px solid #333"><span style="color:#3c3">' + (e.ok||0) + '</span> / <span style="color:#f44">' + (e.ko||0) + '</span></td>'
                 + '<td style="padding:4px;border-bottom:1px solid #333">' + escapeHtml(opts.join(' ')) + '</td>'
@@ -819,123 +948,100 @@
   }
 
   function runAction() {
+    if (state.runBusy) return;
     var action = $('actionSel').value;
     var ids = selectedNodeIds();
-    if (!ids.length) { alert('No computer selected.'); return; }
-    if ($('scheduleOn').checked && (!state.fogTimezone || !$('scheduleAt').value)) {
+    if (!ids.length) { alert('Sélectionnez au moins un poste.'); return; }
+    var scheduled = $('scheduleOn').checked;
+    if (scheduled && (!state.fogTimezone || !$('scheduleAt').value)) {
       alert(state.scheduleInfoError || 'Choisissez une date et une heure FOG.');
       return;
     }
-
-    // Make sure we know the FOG host id for each selected node.
+    if (action === 'snapin' && !$('snapinSel').value) { alert('Choisissez un snapin.'); return; }
+    state.runBusy = true;
+    updateSummary();
+    renderNodes();
     var missing = ids.filter(function (id) { return state.fogMap[id] === undefined; });
-    var p = missing.length ? lookupSelected() : Promise.resolve();
-
-    p.then(function () {
+    // Include selections outside the current group/filter in the lookup.
+    var pending = missing.length ? resolveNodes(state.nodes.filter(function (n) { return missing.indexOf(n.id) !== -1; }), false) : Promise.resolve();
+    return pending.then(function () {
       var hostIds = [];
-      var skipped = 0;
       ids.forEach(function (id) {
-        var f = state.fogMap[id];
-        if (f && f.id) hostIds.push(f.id);
-        else skipped++;
+        var fog = state.fogMap[id];
+        if (fog && fog.id && hostIds.indexOf(String(fog.id)) === -1) hostIds.push(String(fog.id));
       });
-      if (!hostIds.length) {
-        alert('None of the selected computers are known to FOG.');
-        return;
-      }
+      if (!hostIds.length) throw new Error('Aucun poste sélectionné n’est reconnu par FOG.');
+      var msg = executionSummary(hostIds.length);
+      var skipped = ids.filter(function (id) { return !state.fogMap[id]; }).length;
+      if (skipped) msg += '\n' + skipped + ' poste(s) absent(s) de FOG seront exclus.';
       var flags = [];
-      if ($('optWol').checked) flags.push('WoL');
-      if ($('optShutdown').checked) flags.push('shutdown after');
-      var when = $('scheduleOn').checked ? (' SCHEDULED for ' + $('scheduleAt').value.replace('T', ' ') + ' — heure FOG (' + state.fogTimezone + ')') : '';
-      var msg = action.toUpperCase() + ' on ' + hostIds.length + ' FOG host(s)'
-              + (skipped ? ' (' + skipped + ' skipped, unknown to FOG)' : '')
-              + when
-              + (flags.length ? ' [' + flags.join(', ') + ']' : '');
-      if (!confirm(msg + '. Continue?')) return;
-
-      $('progress').textContent = '0/' + hostIds.length;
+      if ($('optWol').checked) flags.push('réveil WoL');
+      if ($('optShutdown').checked) flags.push('extinction après exécution');
+      if ($('optJoinAd').checked) flags.push('jonction au domaine');
+      if ($('optForceName').checked) flags.push('application du nom du poste');
+      if (flags.length) msg += '\nOptions : ' + flags.join(', ') + '.';
+      if (!confirm(msg + '\n\nConfirmer cette opération ?')) return;
+      $('progress').textContent = 'Envoi aux ' + hostIds.length + ' poste(s)…';
       log(msg);
-
-      var apiAction, extra = {};
-      if (action === 'deploy') {
-        apiAction = 'deploy';
-        var imgId = $('imageSel').value;
-        if (imgId) extra.imageId = imgId;
-      } else if (action === 'capture') {
-        apiAction = 'capture';
-      } else if (action === 'snapin') {
-        apiAction = 'snapinRun';
-        var sid = $('snapinSel').value;
-        if (!sid) { alert('Pick a snapin first.'); return; }
-        extra.snapinId = sid;
-      }
-
-      // Send the selected clock reading unchanged. The server converts it in
-      // the configured FOG timezone and checks FOG's returned runtime.
-      if ($('scheduleOn').checked) {
-        var ts = $('scheduleAt').value;
-        extra.scheduledFor = ts.replace('T', ' ');
+      var apiAction = action === 'snapin' ? 'snapinRun' : action;
+      var extra = { hostIds: hostIds.join(',') };
+      if (action === 'deploy' && $('imageSel').value) extra.imageId = $('imageSel').value;
+      if (action === 'snapin') extra.snapinId = $('snapinSel').value;
+      if (scheduled) {
+        extra.scheduledFor = $('scheduleAt').value.replace('T', ' ');
         extra.scheduleMode = 'fog';
         extra.scheduleTimezone = state.fogTimezone;
       }
-
-      // Per-task flags
       if ($('optWol').checked) extra.wol = '1';
       if ($('optShutdown').checked) extra.shutdown = '1';
-
-      extra.hostIds = hostIds.join(',');
-
-      // Pré-setup AD si demandé : on patche les hosts (useAD/enforce + champs
-      // AD si vides) avant de poster la task. Séquentiel pour avoir des logs
-      // clairs en cas d'échec partiel.
       var adPre = Promise.resolve();
       if ($('optJoinAd').checked) {
         adPre = adPre.then(function () {
-          log('Join domain on ' + hostIds.length + ' host(s)…');
+          log('Jonction au domaine sur ' + hostIds.length + ' poste(s)…');
           return api('setupAd', { mode: 'join', hostIds: hostIds.join(',') }).then(function (r) {
             var ok = 0, ko = 0;
             if (r && r.results) Object.keys(r.results).forEach(function (h) { r.results[h].ok ? ok++ : ko++; });
-            log('  join: ' + ok + ' ok, ' + ko + ' failed');
+            log('Domaine : ' + ok + ' OK, ' + ko + ' échec(s).');
           });
         });
       }
       if ($('optForceName').checked) {
         adPre = adPre.then(function () {
-          log('Force name change on ' + hostIds.length + ' host(s)…');
+          log('Application du nom sur ' + hostIds.length + ' poste(s)…');
           return api('setupAd', { mode: 'forceNameChange', hostIds: hostIds.join(',') }).then(function (r) {
             var ok = 0, ko = 0;
             if (r && r.results) Object.keys(r.results).forEach(function (h) { r.results[h].ok ? ok++ : ko++; });
-            log('  forceName: ' + ok + ' ok, ' + ko + ' failed');
+            log('Nom du poste : ' + ok + ' OK, ' + ko + ' échec(s).');
           });
         });
       }
-
-      adPre.then(function () { return api(apiAction, extra); }).then(function (r) {
-        if (r && r.results) {
-          var ok = 0, ko = 0, errs = [];
-          Object.keys(r.results).forEach(function (hid) {
-            if (r.results[hid].ok) {
-              ok++;
-              if (r.results[hid].scheduledTaskId) {
-                log('FOG scheduled task #' + r.results[hid].scheduledTaskId + ' for host ' + hid);
-              }
-            }
-            else { ko++; errs.push(hid + ': ' + r.results[hid].error); }
-          });
-          $('progress').textContent = ok + '/' + hostIds.length + (ko ? ' (' + ko + ' failed)' : '');
-          log('Done. ' + ok + ' ok, ' + ko + ' failed.');
-          if (extra.scheduleMode === 'fog' && ok) {
-            log('Les tâches sont visibles dans l’onglet Tâches planifiées.');
-            selectTaskTab('scheduled');
+      return adPre.then(function () { return api(apiAction, extra); }).then(function (r) {
+        if (!r || !r.results) throw new Error(r && r.error || 'Réponse FOG invalide.');
+        var ok = 0, ko = 0;
+        hostIds.forEach(function (id) {
+          var result = r.results[id];
+          if (result && result.ok) {
+            ok++;
+            if (result.scheduledTaskId) log('Tâche planifiée FOG #' + result.scheduledTaskId + ' pour le poste ' + id);
+          } else {
+            ko++;
+            log('Poste ' + id + ' : ' + (result && result.error || 'Résultat non confirmé'));
           }
-          errs.slice(0, 10).forEach(function (e) { log('  ' + e); });
-        } else if (r && r.error) {
-          log('Error: ' + r.error);
-          $('progress').textContent = 'error';
-        }
-      }).catch(function (e) {
-        log('Request failed: ' + e.message);
+        });
+        $('progress').textContent = ok + '/' + hostIds.length + (scheduled ? ' planifié(s)' : ' envoyé(s)') + (ko ? ' · ' + ko + ' échec(s), voir le journal' : ' · terminé');
+        log('Terminé : ' + ok + ' OK, ' + ko + ' échec(s).');
+        if (ko) showLogs(true);
+        if (scheduled && ok) selectTaskTab('scheduled');
+        else pollActiveTasks();
       });
+    }).catch(function (e) {
+      $('progress').textContent = 'Opération impossible : ' + e.message;
+      log('Erreur : ' + e.message);
+      showLogs(true);
+    }).then(function () {
+      state.runBusy = false;
+      updateSummary();
+      renderNodes();
     });
   }
 
@@ -960,6 +1066,7 @@
     $('groupSearch').oninput = renderGroups;
     $('nodeSearch').oninput = renderNodes;
     $('lookupBtn').onclick = function () { showLogs(true); lookupSelected(); };
+    $('clearSelectionBtn').onclick = function () { state.checkedNodes = {}; renderNodes(); };
     $('runBtn').onclick = runAction;
     $('logsBtn').onclick = function () { showLogs($('logs').style.display === 'none'); resizeCols(); };
     $('historyBtn').onclick = openHistory;
@@ -979,11 +1086,7 @@
     $('cancelScheduledBtn').onclick = cancelSelectedScheduledTasks;
     renderTasks();
     renderScheduledTasks();
-    $('actionSel').onchange = function () {
-      var a = $('actionSel').value;
-      $('snapinWrap').style.display = (a === 'snapin') ? '' : 'none';
-      $('imageWrap').style.display  = (a === 'deploy') ? '' : 'none';
-    };
+    $('actionSel').onchange = updateActionUI;
     // Trigger once so the initial Deploy selection shows its image dropdown.
     $('actionSel').onchange();
 
@@ -991,21 +1094,21 @@
     // relabel the Run button. Default datetime is now + 1h, rounded to the next
     // 15 minutes — typical for "schedule for tonight" workflows.
     function updateScheduleUI() {
-      var on = $('scheduleOn').checked;
-      $('runBtn').textContent = on ? 'Schedule on selected' : 'Run on selected';
       updateScheduleTimezone();
     }
     $('scheduleOn').onchange = updateScheduleUI;
     $('scheduleAt').oninput = updateScheduleTimezone;
+    ['imageSel', 'snapinSel', 'optWol', 'optShutdown', 'optJoinAd', 'optForceName'].forEach(function (id) { $(id).onchange = updateSummary; });
     loadScheduleInfo();
 
     // Ping the FOG server through the plugin endpoint to surface config issues early.
     api('ping').then(function (r) {
       var el = $('cfgState');
       if (r && r.ok) {
-        el.textContent = 'FOG OK';
-        el.style.background = '#d4edda';
-        el.style.color = '#155724';
+        state.fogConnected = true;
+        el.textContent = 'FOG connecté';
+        el.className = 'badge good';
+        updateSummary();
         loadImages();
         loadSnapins();
         autoResolveSoon();
@@ -1016,15 +1119,14 @@
           if (state.taskTab === 'scheduled') pollScheduledTasks();
         }, 8000);
       } else {
-        el.textContent = 'FOG: ' + (r && r.error ? r.error : 'unreachable');
-        el.style.background = '#f8d7da';
-        el.style.color = '#721c24';
+        el.textContent = 'FOG indisponible';
+        el.className = 'badge bad';
+        log('Connexion FOG : ' + (r && r.error || 'serveur inaccessible'));
       }
     }).catch(function () {
       var el = $('cfgState');
-      el.textContent = 'plugin endpoint unreachable';
-      el.style.background = '#f8d7da';
-      el.style.color = '#721c24';
+      el.textContent = 'Module inaccessible';
+      el.className = 'badge bad';
     });
   }
 

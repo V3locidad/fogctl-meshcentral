@@ -258,7 +258,7 @@ test('stored host, type, time, active state and snapin must match the request', 
 
 test('the browser sends the selected FOG clock reading unchanged and logs its timezone', { timeout: 5000 }, async () => {
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const runAction = source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
+    const runAction = source.slice(source.indexOf('  function chosenItem() {'), source.indexOf('  function updateSummary() {')) + source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
     const controls = {
         actionSel: { value: 'snapin' }, snapinSel: { value: '42' },
         scheduleOn: { checked: true }, scheduleAt: { value: '2030-10-13T11:00' },
@@ -267,9 +267,9 @@ test('the browser sends the selected FOG clock reading unchanged and logs its ti
     const calls = [], logs = [], tabs = [];
     const sandbox = {
         $: id => controls[id], selectedNodeIds: () => ['node1'],
-        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC' }, confirm: () => true,
+        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC', snapins: [{ id: '42', name: 'Mesh' }] }, confirm: () => true,
         alert: message => assert.fail(message), log: message => logs.push(message),
-        selectTaskTab: tab => tabs.push(tab),
+        selectTaskTab: tab => tabs.push(tab), updateSummary() {}, renderNodes() {}, showLogs() {},
         api: (action, params) => {
             calls.push({ action, params });
             return Promise.resolve({ results: { '1038': { ok: true, scheduledTaskId: 700 } } });
@@ -282,8 +282,8 @@ test('the browser sends the selected FOG clock reading unchanged and logs its ti
     assert.equal(calls[0].params.scheduleMode, 'fog');
     assert.equal(calls[0].params.scheduleTimezone, 'UTC');
     assert.equal(calls[0].params.scheduleTime, undefined);
-    assert.ok(logs.some(message => message.includes('scheduled task #700')));
-    assert.ok(logs.some(message => message.includes('2030-10-13 11:00 — heure FOG (UTC)')));
+    assert.ok(logs.some(message => message.includes('Tâche planifiée FOG #700')));
+    assert.ok(logs.some(message => message.includes('13/10/2030 à 11:00 — heure FOG (UTC)')));
     assert.deepEqual(tabs, ['scheduled']);
 });
 
@@ -326,7 +326,7 @@ test('scheduledTasks distinguishes an empty list from API errors and invalid dat
 
 function scheduledTabHarness() {
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const code = source.slice(source.indexOf('  function fogDateInput('), source.indexOf('  function showTasks(v) {'));
+    const code = source.slice(source.indexOf('  function taskTypeLabel('), source.indexOf('  function chosenItem(')) + source.slice(source.indexOf('  function fogDateInput('), source.indexOf('  function showTasks(v) {'));
     const elements = {};
     const state = {
         taskTab: 'active', scheduledList: [], snapins: [], scheduledLoaded: false,
@@ -350,7 +350,7 @@ function scheduledTabHarness() {
         }),
         escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
         api: (action, data) => { calls.push(action); params.push(data); return Promise.resolve(typeof reply === 'function' ? reply(action, data) : reply); },
-        confirm: () => true, log: message => logs.push(message), alert: message => alerts.push(message),
+        confirm: () => true, log: message => logs.push(message), alert: message => alerts.push(message), updateSummary() {},
         pollActiveTasks: () => calls.push('activeTasks')
     };
     vm.runInNewContext(code, sandbox);
@@ -634,7 +634,7 @@ test('a failed rollback identifies the wrong-time schedule that still needs canc
 test('end-to-end browser 11:00 input reaches the FOG API as 11:00, not 09:00', { timeout: 5000 }, async t => {
     const h = await harness(t);
     const source = fs.readFileSync(path.join(__dirname, '../views/fogctl.handlebars'), 'utf8');
-    const runAction = source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
+    const runAction = source.slice(source.indexOf('  function chosenItem() {'), source.indexOf('  function updateSummary() {')) + source.slice(source.indexOf('  function runAction() {'), source.indexOf('  // Resize columns'));
     const controls = {
         actionSel: { value: 'snapin' }, snapinSel: { value: '41' },
         scheduleOn: { checked: true }, scheduleAt: { value: '2030-10-13T11:00' },
@@ -644,8 +644,8 @@ test('end-to-end browser 11:00 input reaches the FOG API as 11:00, not 09:00', {
     const result = new Promise(resolve => { finished = resolve; });
     vm.runInNewContext(runAction + '\nrunAction();', {
         $: id => controls[id], selectedNodeIds: () => ['node1'],
-        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC' },
-        confirm: () => true, alert: message => assert.fail(message), log() {}, selectTaskTab() {},
+        state: { fogMap: { node1: { id: '1038' } }, fogTimezone: 'UTC', snapins: [{ id: '41', name: 'Mesh' }] },
+        confirm: () => true, alert: message => assert.fail(message), log() {}, selectTaskTab() {}, updateSummary() {}, renderNodes() {}, showLogs() {},
         api: (action, params) => h.call({ action, ...params }).then(r => { finished(r.body); return r.body; })
     });
     const response = await result;
