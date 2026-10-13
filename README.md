@@ -56,7 +56,7 @@ Built for IT admins running classroom/lab fleets where the same image or snapin 
 6. Pick an action:
    - **Deploy image** — schedules task type 1 (image down) on each FOG host
    - **Capture image** — schedules task type 2 (image up). Only meaningful on master/reference machines
-   - **Run snapin** — pick a snapin from the dropdown; the plugin associates the snapin to the host (idempotent) then schedules task type 12
+   - **Run snapin** — pick a snapin from the dropdown; the plugin creates a **Single Snapin** task (type 13) for that snapin on each selected host, without adding or changing host snapin associations. This also applies when using **Schedule**.
 7. Click **Run on selected**. A confirmation prompt lists how many FOG hosts will be tasked and how many were skipped (not found in FOG)
 8. Watch the progress counter; click **Logs** for per-host results
 
@@ -71,11 +71,19 @@ The plugin runs entirely server-side for the FOG calls. The browser only talks t
 | `deploy`     | `POST /fog/host/{id}/task` with `taskTypeID: 1` per host       |
 | `capture`    | same with `taskTypeID: 2`                                      |
 | `snapinList` | `GET /fog/snapin`                                              |
-| `snapinRun`  | `POST /fog/snapinassociation/create` then `taskTypeID: 12`     |
+| `snapinRun`  | `POST /fog/host/{id}/task` with `taskTypeID: 13` and `deploySnapins: <selected snapin ID>` |
 | `tasks`      | `GET /fog/task/active`                                         |
 | `cancel`     | `DELETE /fog/task/{id}/cancel`                                 |
 
 Authentication uses the standard FOG headers `fog-api-token` (system) and `fog-user-token` (user).
+
+Scheduled snapin runs use `POST /fog/scheduledtask/create` with `taskTypeID: 13`, `isGroupTask: 0`, and `other2: <selected snapin ID>`. FOG 1.5.x's scheduler reads the snapin ID from `other2` and the WoL option from `other4`; the immediate-task fields `deploySnapins` and `wol` are not stored by that endpoint. See the [FOG scheduler source](https://github.com/FOGProject/fogproject/blob/1.5.10/packages/web/lib/service/taskscheduler.class.php#L238-L249).
+
+Existing host associations and previously queued tasks are not changed by this fix. FOG may combine a new single-snapin request with snapin tasks already pending on that host; it does not enqueue all associated snapins merely because another task exists.
+
+## Tests
+
+With Node.js 18 or later, run `node --test test/snapin-run.test.js`. The tests use a local HTTP stub and in-memory configuration/history; they do not connect to a live FOG server.
 
 ## Troubleshooting
 

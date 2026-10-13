@@ -421,8 +421,8 @@ module.exports.fogctl = function (parent) {
                 .catch(function (e) { sendJson(res, 500, { error: e.message }); });
         }
 
-        // -------- snapinRun: trigger snapin task (type 12) on a list of hosts.
-        // FOG associates the snapin to the host first if needed.
+        // -------- snapinRun: trigger a Single Snapin task (type 13) per host.
+        // Pass the selected ID directly; do not change host snapin associations.
         // Optional `scheduledFor` turns it into a single-shot scheduled task.
         if (action === 'snapinRun') {
             var snapinId = req.query.snapinId;
@@ -431,34 +431,40 @@ module.exports.fogctl = function (parent) {
             var snapinWol = req.query.wol === '1';
             var snapinShutdown = req.query.shutdown === '1';
             if (!snapinId) return sendJson(res, 400, { error: 'snapinId required' });
+            // In FOG, -1/true means all associated snapins. Accept only one ID.
+            if (typeof snapinId !== 'string' || !/^[1-9]\d*$/.test(snapinId) || !Number.isSafeInteger(Number(snapinId))) {
+                return sendJson(res, 400, { error: 'snapinId must be a positive integer' });
+            }
+            var selectedSnapinId = Number(snapinId);
             if (!ids2.length) return sendJson(res, 400, { error: 'no host ids' });
             var out2 = {};
             var qq2 = ids2.slice();
-            function assocAndRun(hostId) {
-                return fogCall('POST', '/fog/snapinassociation/create', { snapinID: snapinId, hostID: hostId })
-                    .catch(function () { return null; })
-                    .then(function () {
-                        var b;
-                        var ep;
-                        if (snapinSchedFor) {
-                            var ts = Math.floor(Date.parse(snapinSchedFor.replace(' ', 'T')) / 1000);
-                            ep = '/fog/scheduledtask/create';
-                            b = {
-                                name: 'fogctl snapin ' + snapinSchedFor,
-                                hostID: parseInt(hostId, 10),
-                                taskTypeID: 12,
-                                type: 'S',
-                                scheduleTime: ts,
-                                isActive: 1
-                            };
-                        } else {
-                            ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
-                            b = { taskTypeID: 12 };
-                        }
-                        if (snapinWol) b.wol = true;
-                        if (snapinShutdown) b.shutdown = true;
-                        return fogCall('POST', ep, b);
-                    });
+            function runSingleSnapin(hostId) {
+                var b;
+                var ep;
+                if (snapinSchedFor) {
+                    var ts = Math.floor(Date.parse(snapinSchedFor.replace(' ', 'T')) / 1000);
+                    ep = '/fog/scheduledtask/create';
+                    b = {
+                        name: 'fogctl snapin ' + snapinSchedFor,
+                        hostID: parseInt(hostId, 10),
+                        taskTypeID: 13,
+                        type: 'S',
+                        isGroupTask: 0,
+                        // FOG 1.5.x scheduler reads the snapin ID from other2.
+                        other2: selectedSnapinId,
+                        scheduleTime: ts,
+                        isActive: 1
+                    };
+                    // ScheduledTask stores WoL in other4, not wol.
+                    if (snapinWol) b.other4 = 1;
+                } else {
+                    ep = '/fog/host/' + encodeURIComponent(hostId) + '/task';
+                    b = { taskTypeID: 13, deploySnapins: selectedSnapinId };
+                    if (snapinWol) b.wol = true;
+                }
+                if (snapinShutdown) b.shutdown = true;
+                return fogCall('POST', ep, b);
             }
             function stepS() {
                 if (!qq2.length) {
@@ -476,7 +482,7 @@ module.exports.fogctl = function (parent) {
                     return sendJson(res, 200, { ok: true, results: out2 });
                 }
                 var hid = qq2.shift();
-                assocAndRun(hid)
+                runSingleSnapin(hid)
                     .then(function (r) { out2[hid] = { ok: true, data: r.data }; stepS(); })
                     .catch(function (e) { out2[hid] = { ok: false, error: e.message }; stepS(); });
             }
@@ -497,8 +503,8 @@ module.exports.fogctl = function (parent) {
                     var arr = (r.data && r.data.tasks) || r.data || [];
                     var byHost = {};
                     var list = [];
-                    // FOG task type names (subset): 1=Deploy, 2=Capture, 8=Multicast, 12=Snapin
-                    var typeNames = { '1': 'Deploy', '2': 'Capture', '8': 'Multicast', '12': 'Snapin' };
+                    // FOG task type names (subset), including Single Snapin.
+                    var typeNames = { '1': 'Deploy', '2': 'Capture', '8': 'Multicast', '12': 'Snapin', '13': 'Single Snapin' };
                     arr.forEach(function (t) {
                         var hid = t.hostID || (t.host && t.host.id);
                         var typeId = String(t.typeID || (t.type && t.type.id) || '');
